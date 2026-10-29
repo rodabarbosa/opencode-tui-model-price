@@ -1,57 +1,65 @@
 # OpenCode Model Pricing Plugin (`opencode-model-pricing`)
 
-Plugin para o **OpenCode v2** que adiciona exibição detalhada dos custos de **Input**, **Output** e **Cache** (leitura/escrita) por milhão de tokens na seleção de modelos, com sincronização diária e interface dividida (Split-View) no OpenCode CLI (TUI).
+A plugin for **OpenCode v2** that displays detailed token costs for **Input**, **Output**, and **Cache** (read/write) per million tokens during model selection, featuring once-a-day synchronization, favorite model pinning, and an interactive Split-View interface in the OpenCode CLI (TUI).
+
+![Model Selection Window](src/images/model-window.png)
 
 ---
 
-## 🎯 Objetivos
+## 🎯 Objectives
 
-1. **Transparência de Custos**: Exibir em tempo real quanto custa cada modelo em tokens de entrada, saída e cache antes de selecioná-lo.
-2. **Interface Intuitiva no CLI**: Substituir a seleção padrão de modelos por uma janela modal ampla dividida em duas colunas:
-   - **Esquerda**: Lista de modelos navegável com indicador de foco e provedor.
-   - **Direita (Área Secundária)**: Card detalhado com os valores em USD por 1M tokens, janela de contexto máxima e limites de geração.
-3. **Economia de Rede (Cache Diário)**: Buscar a tabela de preços apenas uma vez por dia (no primeiro acesso do dia ao OpenCode), persistindo os dados em storage local.
-4. **Atualização Sob Demanda**: Disponibilizar um comando slash rápido para forçar a atualização imediata dos preços quando novos modelos forem lançados.
-
----
-
-## 🚀 Recursos
-
-- **Comando Único `/models`**: Substitui o comando nativo `model.list` sem duplicidades no menu slash.
-- **Área Secundária de Precificação**:
-  - `Input (Entrada)` por 1M tokens
-  - `Output (Saída)` por 1M tokens
-  - `Cache Read (Leitura de Cache)` por 1M tokens
-  - `Cache Write (Escrita de Cache)` por 1M tokens
-  - `Context Window` e `Max Output`
-- **Sincronização Híbrida**: Integra custos nativos do OpenCode e matriz pública do `models.dev` (abrangendo OpenAI, Anthropic, Google Gemini, OpenRouter, DeepSeek, Qwen, etc.).
-- **Comando `/update-model-prices`**: Força o download da matriz de preços atualizada a qualquer momento.
-- **Teclas de Atalho no Modal**:
-  - `↑` / `↓` ou `k` / `j`: Navega entre os modelos.
-  - `PageUp` / `PageDown`: Pula blocos de modelos.
-  - `Enter`: Seleciona o modelo para a sessão ativa e fecha a janela.
-  - `Ctrl + F`: Alterna o modelo em foco como **Favorito (★)** (fixando-o no topo da lista).
-  - `Ctrl + R`: Força a atualização da tabela de preços em tempo real diretamente da janela.
-  - `Esc`: Fecha a janela modal sem alterar o modelo.
+1. **Cost Transparency**: View real-time token pricing (input, output, and cache) before selecting an AI model.
+2. **Intuitive CLI Split-View**: Replace the default selection picker with an expanded, balanced two-column modal:
+   - **Left Pane**: Categorized, navigable model list with visual group dividers and selection indicator (`▶`).
+   - **Right Pane (Secondary Area)**: Dedicated card detailing USD rates per 1M tokens, maximum context window, and generation limits.
+3. **Favorites Support**: Pin preferred models with `Ctrl+F` so they automatically appear at the top of the list in a dedicated `★ FAVORITES` section.
+4. **Bandwidth & Latency Efficiency (Daily Cache)**: Fetch the global pricing matrix once per day on the user's first OpenCode access, storing data locally in persistent storage.
+5. **On-Demand Updates**: Provide a quick slash command (`/update-model-prices`) to immediately refresh pricing whenever new models or rates are announced.
 
 ---
 
-## 📦 Como Instalar
+## 🚀 Key Features
 
-### 1. Clonar ou copiar o diretório do plugin
+- **Single `/models` Command**: Cleanly replaces the built-in `model.list` command without duplicate entries in the slash autocomplete menu.
+- **Detailed Pricing Metrics**:
+  - `Input` per 1M tokens
+  - `Output` per 1M tokens
+  - `Cache Read` per 1M tokens
+  - `Cache Write` per 1M tokens
+  - `Context Window` & `Max Output` limits
+- **Alphabetical Sorting**: Models within Favorites and each provider group are automatically sorted alphabetically by name.
+- **Instant Search / Filtering**: Dedicated search input bar at the top of the modal (`Type to Search`) supporting real-time filtering by model name, ID, or provider.
+- **Visual Provider Grouping**: Clean provider section headers without separation lines (`GitHub Copilot`, `OpenRouter`, `OpenCode`, etc.).
+- **Hybrid Synchronization**: Seamlessly combines native OpenCode cost structures with public matrices from `models.dev` (covering OpenAI, Anthropic, Google Gemini, OpenRouter, DeepSeek, Qwen, etc.).
+- **Keyboard & Mouse Support in Modal**:
+  - `Type`: Direct typing into the search bar to filter models.
+  - `Mouse Wheel`: Scroll up/down through the model list using the mouse wheel.
+  - `Mouse Click`: Click to highlight, double-click or click `[ Select Model ]` to confirm. Click `[ Favorite ]` to toggle favorite status.
+  - `↑` / `↓` or `Ctrl+P` / `Ctrl+N`: Navigate through filtered models.
+  - `PageUp` / `PageDown`: Jump across batches of models.
+  - `Enter`: Select the highlighted model for the active session and close the dialog.
+  - `Ctrl + F`: Toggle the highlighted model as **Favorite (★)** (pinned to the top group).
+  - `Ctrl + R`: Force real-time price synchronization directly from within the modal.
+  - `Esc`: Clear search filter, or close the dialog if the search query is empty.
 
-Coloque a pasta `opencode-model-pricing` dentro do diretório de plugins do OpenCode (por padrão `~/.config/opencode/plugins/`):
+---
+
+## 📦 Installation
+
+### 1. Place the plugin directory
+
+Ensure the `opencode-model-pricing` folder is located in your OpenCode plugins directory (default is `~/.config/opencode/plugins/`):
 
 ```bash
-# Exemplo no Windows (PowerShell)
+# Windows (PowerShell)
 cd $env:USERPROFILE\.config\opencode\plugins\
-# ou no Linux/macOS
+# Linux / macOS
 cd ~/.config/opencode/plugins/
 ```
 
-### 2. Registrar no arquivo de configuração
+### 2. Register in configuration
 
-Abra o arquivo de configuração global `opencode.jsonc` (localizado em `~/.config/opencode/opencode.jsonc`) e adicione o caminho do plugin no array `"plugins"`:
+Open your global `opencode.jsonc` file (`~/.config/opencode/opencode.jsonc`) and add the plugin path to the `"plugins"` array:
 
 ```jsonc
 {
@@ -62,36 +70,38 @@ Abra o arquivo de configuração global `opencode.jsonc` (localizado em `~/.conf
 }
 ```
 
-> **Dica**: O OpenCode v2 monitora alterações em arquivos de configuração e plugins automaticamente. Se o terminal já estiver aberto, digite `/reload` para aplicar as alterações imediatamente.
+> **Tip**: OpenCode v2 watches configuration and plugin files automatically. If your terminal is already running, type `/reload` to apply changes immediately.
 
 ---
 
-## 💻 Uso e Comandos
+## 💻 Commands
 
-| Comando | Descrição |
+| Command | Description |
 |---|---|
-| `/models` | Abre a janela modal ampla com a lista de modelos à esquerda e os valores de input, output e cache na área secundária à direita. |
-| `/update-model-prices` | Força a sincronização imediata dos valores de preços via rede, atualizando o storage local. |
+| `/models` | Opens the wide split-screen modal with the model list on the left and input/output/cache rates in the secondary details area on the right. |
+| `/update-model-prices` | Forces an immediate online fetch and update of the pricing table, persisting values to local storage. |
 
 ---
 
-## 📁 Estrutura do Projeto
+## 📁 Project Structure
 
 ```text
 opencode-model-pricing/
-├── package.json        # Manifesto do plugin (exports para servidor, tui e rpc)
-├── tsconfig.json       # Configurações TypeScript e JSX para OpenTUI/SolidJS
-├── README.md           # Documentação e guia de uso
+├── package.json        # Plugin manifest (exports for server, tui, and rpc)
+├── tsconfig.json       # TypeScript and JSX configuration for OpenTUI/SolidJS
+├── README.md           # Documentation and usage guide
 └── src/
-    ├── rpc.ts          # Contrato RPC com Standard Schema para comunicação entre processos
-    ├── pricing.ts      # Busca em models.dev, normalização e formatação monetária (USD)
-    ├── index.ts        # Servidor OpenCode: verificação diária, storage e comando slash
-    └── tui.tsx         # Interface TUI (CLI): Modal interativo xlarge com split-view e keymaps
+    ├── images/         # UI preview screenshots and assets
+    │   └── model-window.png
+    ├── rpc.ts          # RPC contract with Standard Schema for inter-process communication
+    ├── pricing.ts      # Data fetching, normalization, and USD formatting
+    ├── index.ts        # OpenCode server daemon: daily sync, storage, and slash commands
+    └── tui.tsx         # TUI (CLI) interface: xlarge split-view modal and keymaps
 ```
 
 ---
 
-## 📄 Licença MIT
+## 📄 License
 
 MIT License
 

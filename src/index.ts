@@ -74,24 +74,24 @@ export default Plugin.define({
       },
     });
 
-    // 3. Comando slash para forçar atualização
+    // 3. Slash command to force pricing update
     await ctx.command.transform((editor) => {
       editor.add({
         name: "update-model-prices",
-        description: "Força a atualização imediata dos valores de input, output e cache dos modelos",
+        description: "Force immediate update of model input, output, and cache token prices",
         execute: async ({ sessionID }) => {
           const matrix = await syncPrices(true);
           await rpcRegistration.events.emit("updated", matrix);
           const count = Object.keys(matrix).length;
           await ctx.session.synthetic({
             sessionID,
-            text: `✅ **Tabela de Preços Atualizada**: ${count} modelos sincronizados com sucesso.\nValores de input, output e cache já estão ativos no comando \`/models\`.`,
+            text: `✅ **Pricing Table Updated**: ${count} models successfully synchronized.\nInput, output, and cache values are now active in the \`/models\` command.`,
           });
         },
       });
     });
 
-    // 4. Injeta custos nativos sem alterar os nomes originais dos modelos
+    // 4. Inject native costs without modifying original model display names
     await ctx.model.transform((editor) => {
       editor.list().forEach((model) => {
         const key = model.id.toLowerCase();
@@ -113,6 +113,6 @@ export default Plugin.define({
       });
     });
 
-    console.log("[model-pricing] Plugin de precificação de modelos inicializado.");
+    console.log("[model-pricing] Model pricing plugin initialized.");
   },
 });

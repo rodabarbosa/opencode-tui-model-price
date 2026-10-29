@@ -1,58 +1,93 @@
 /** @jsxImportSource @opentui/solid */
 import { Plugin } from "@opencode/plugin/tui";
-import { createSignal, createMemo, For, Show } from "solid-js";
-import { ModelPricingRpc, type PricingMatrix, type ModelPriceDetail } from "./rpc.js";
+import { createMemo, createSignal, For, onMount, Show } from "solid-js";
 import { formatUSD } from "./pricing.js";
+import {
+  ModelPricingRpc,
+  type ModelPriceDetail,
+  type PricingMatrix,
+} from "./rpc.js";
+
+type VisualItem =
+  | { type: "header"; id: string; title: string; count: number; isFav: boolean }
+  | {
+      type: "model";
+      id: string;
+      model: any;
+      modelIndex: number;
+      isFav: boolean;
+    };
+
+function formatProviderTitle(provider: string): string {
+  if (!provider) return "OTHER PROVIDERS";
+  const p = provider.toLowerCase();
+  if (p === "github-copilot" || p === "copilot") return "GITHUB COPILOT";
+  if (p === "openrouter") return "OPENROUTER";
+  if (p === "opencode") return "OPENCODE";
+  if (p === "openai") return "OPENAI";
+  if (p === "anthropic") return "ANTHROPIC";
+  if (p === "google") return "GOOGLE GEMINI";
+  return provider.toUpperCase();
+}
+
+const sortByName = (a: any, b: any) => {
+  const nameA = (a.name || a.id).toLowerCase();
+  const nameB = (b.name || b.id).toLowerCase();
+  return nameA.localeCompare(nameB);
+};
 
 export default Plugin.define({
   id: "model-pricing-tui",
   setup(context) {
     const pricingRpc = context.client.rpc(ModelPricingRpc);
 
-    // Armazenamento durável de modelos favoritos (persiste no disco e entre reinicializações)
-    const [favoritesStore, updateFavorites] = context.storage.store("favorites", {
-      initial: { ids: [] as string[] },
-    });
+    // Durable storage for favorite models
+    const [favoritesStore, updateFavorites] = context.storage.store(
+      "favorites",
+      {
+        initial: { ids: [] as string[] },
+      },
+    );
 
-    // Substitui o comando built-in model.list por esta versão enriquecida com preços e favoritos
+    // Override built-in model.list command with pricing & favorites support
     context.keymap.layer(() => ({
       mode: "global",
       priority: 100,
       commands: [
         {
           id: "model.list",
-          title: "Modelos: Selecionar com detalhes de preços",
-          group: "Modelos",
+          title: "Models: Select with pricing details",
+          group: "Models",
           slash: { name: "models" },
           palette: true,
           suggested: true,
-          run: async () => {
-            await openPricingModelDialog();
+          run: () => {
+            openPricingModelDialog();
           },
         },
         {
           id: "model.pricing.refresh",
-          title: "Modelos: Forçar atualização dos preços de tokens",
-          group: "Modelos",
+          title: "Models: Force refresh token prices",
+          group: "Models",
           slash: { name: "update-model-prices" },
           palette: true,
           run: async () => {
             try {
               context.ui.toast.show({
-                title: "Preços",
-                message: "Atualizando tabela de preços...",
+                title: "Pricing",
+                message: "Updating pricing table...",
                 variant: "info",
               });
               const res = await pricingRpc.forceRefresh();
               context.ui.toast.show({
-                title: "Preços Atualizados",
-                message: `${res.count} modelos sincronizados com sucesso.`,
+                title: "Prices Updated",
+                message: `${res.count} models successfully synchronized.`,
                 variant: "success",
               });
             } catch (err: any) {
               context.ui.toast.show({
-                title: "Erro na Atualização",
-                message: err?.message || "Falha ao sincronizar preços.",
+                title: "Update Error",
+                message: err?.message || "Failed to synchronize prices.",
                 variant: "danger",
               });
             }
@@ -61,31 +96,10 @@ export default Plugin.define({
       ],
     }));
 
-    async function openPricingModelDialog() {
-      let modelsList: any[] = [];
-      try {
-        const location = context.location ?? context.data.location.default();
-        modelsList = (await context.client.model.list({ location }))?.data ?? [];
-      } catch {
-        modelsList = context.data.location.model.list() ?? [];
-      }
-
-      if (modelsList.length === 0) {
-        context.ui.toast.show({
-          title: "Modelos",
-          message: "Nenhum modelo disponível encontrado.",
-          variant: "warning",
-        });
-        return;
-      }
-
-      let initialPrices: PricingMatrix = {};
-      try {
-        initialPrices = (await pricingRpc.getPrices()) as PricingMatrix;
-      } catch {
-        // Fallback vazio
-      }
-
+    function openPricingModelDialog() {
+      // Load initial local models synchronously for instant 0ms dialog display
+      const localModels = context.data.location.model.list() ?? [];
+      const location = context.location ?? context.data.location.default();
       const activeSessionID = context.data.session.list()?.[0]?.id;
 
       context.ui.dialog.set({ size: "xlarge", centered: true });
@@ -93,9 +107,37 @@ export default Plugin.define({
       context.ui.dialog.show(() => {
         context.ui.dialog.set({ size: "xlarge", centered: true });
 
+        const [modelsList, setModelsList] = createSignal<any[]>(localModels);
         const [selectedIndex, setSelectedIndex] = createSignal(0);
-        const [prices, setPrices] = createSignal<PricingMatrix>(initialPrices);
+        const [searchQuery, setSearchQuery] = createSignal("");
+        const [prices, setPrices] = createSignal<PricingMatrix>({});
         const [isRefreshing, setIsRefreshing] = createSignal(false);
+
+        let inputRef: any = null;
+        let lastClickTime = 0;
+
+        onMount(() => {
+          // Focus the input immediately on render
+          inputRef?.focus();
+
+          // Fetch prices in background without delaying dialog presentation
+          pricingRpc
+            .getPrices()
+            .then((p) => {
+              if (p) setPrices(p as PricingMatrix);
+            })
+            .catch(() => {});
+
+          // Always ensure the freshest model list is loaded
+          context.client.model
+            .list({ location })
+            .then((res) => {
+              if (res?.data && res.data.length > 0) {
+                setModelsList(res.data);
+              }
+            })
+            .catch(() => {});
+        });
 
         const theme = () => {
           try {
@@ -107,29 +149,122 @@ export default Plugin.define({
 
         const close = () => context.ui.dialog.clear();
 
-        // Verifica se um modelo está nos favoritos
         const isFavorite = (id?: string) => {
           if (!id) return false;
           const list = favoritesStore.ids || [];
           return list.includes(id.toLowerCase());
         };
 
-        // Ordena os modelos colocando os favoritos no topo
-        const models = createMemo(() => {
+        // Filter models based on search query
+        const filteredModelsList = createMemo(() => {
+          const q = searchQuery().trim().toLowerCase();
+          const list = modelsList();
+          if (!q) return list;
+          return list.filter((m) => {
+            const name = (m.name || "").toLowerCase();
+            const id = (m.id || "").toLowerCase();
+            const provider = (m.providerID || "").toLowerCase();
+            return name.includes(q) || id.includes(q) || provider.includes(q);
+          });
+        });
+
+        // Group models: 1st Favorites (if any), 2nd by Provider, sorted alphabetically by name
+        const visualData = createMemo(() => {
+          const list = filteredModelsList();
           const favs: any[] = [];
-          const others: any[] = [];
-          for (const m of modelsList) {
+          const byProvider: Record<string, any[]> = {};
+
+          for (const m of list) {
             if (isFavorite(m.id)) {
               favs.push(m);
             } else {
-              others.push(m);
+              const p = (m.providerID || "other").toLowerCase();
+              if (!byProvider[p]) byProvider[p] = [];
+              byProvider[p].push(m);
             }
           }
-          return [...favs, ...others];
+
+          favs.sort(sortByName);
+
+          const entries: VisualItem[] = [];
+          const selectable: any[] = [];
+          let globalIdx = 0;
+
+          // 1. Favorites group (only if there are favorited models)
+          if (favs.length > 0) {
+            entries.push({
+              type: "header",
+              id: "hdr_favorites",
+              title: "★ FAVORITES",
+              count: favs.length,
+              isFav: true,
+            });
+            for (const m of favs) {
+              entries.push({
+                type: "model",
+                id: `fav_${m.id}`,
+                model: m,
+                modelIndex: globalIdx++,
+                isFav: true,
+              });
+              selectable.push(m);
+            }
+          }
+
+          // 2. Provider groups sorted by priority and alphabetically
+          const priority = [
+            "copilot",
+            "github-copilot",
+            "opencode",
+            "openrouter",
+            "openai",
+            "anthropic",
+            "google",
+          ];
+
+          const sortedProviders = Object.keys(byProvider).sort((a, b) => {
+            const idxA = priority.indexOf(a);
+            const idxB = priority.indexOf(b);
+            if (idxA !== -1 && idxB !== -1) return idxA - idxB;
+            if (idxA !== -1) return -1;
+            if (idxB !== -1) return 1;
+            return a.localeCompare(b);
+          });
+
+          for (const provider of sortedProviders) {
+            const pModels = byProvider[provider];
+            if (!pModels || pModels.length === 0) continue;
+
+            pModels.sort(sortByName);
+
+            entries.push({
+              type: "header",
+              id: `hdr_${provider}`,
+              title: formatProviderTitle(provider),
+              count: pModels.length,
+              isFav: false,
+            });
+
+            for (const m of pModels) {
+              entries.push({
+                type: "model",
+                id: m.id,
+                model: m,
+                modelIndex: globalIdx++,
+                isFav: false,
+              });
+              selectable.push(m);
+            }
+          }
+
+          return { entries, selectable };
         });
 
+        const totalSelectable = () => visualData().selectable.length;
+
         const currentModel = createMemo(() => {
-          const list = models();
+          const list = visualData().selectable;
+          if (list.length === 0) return undefined;
           const idx = selectedIndex();
           return list[idx] || list[0];
         });
@@ -146,7 +281,11 @@ export default Plugin.define({
           }
           const dict = prices();
           const fullId = (m.id || "").toLowerCase();
-          const shortId = (m.modelID || fullId.split("/")[1] || fullId).toLowerCase();
+          const shortId = (
+            m.modelID ||
+            fullId.split("/")[1] ||
+            fullId
+          ).toLowerCase();
 
           return (
             dict[fullId] ||
@@ -162,23 +301,32 @@ export default Plugin.define({
           );
         });
 
+        const selectedVisualIdx = createMemo(() => {
+          const list = visualData().entries;
+          const sIdx = selectedIndex();
+          const found = list.findIndex(
+            (e) => e.type === "model" && e.modelIndex === sIdx,
+          );
+          return found >= 0 ? found : 0;
+        });
+
         const VISIBLE_COUNT = 13;
         const visibleRange = createMemo(() => {
-          const total = models().length;
-          const current = selectedIndex();
-          let start = Math.max(0, current - Math.floor(VISIBLE_COUNT / 2));
-          if (start + VISIBLE_COUNT > total) {
-            start = Math.max(0, total - VISIBLE_COUNT);
+          const list = visualData().entries;
+          const target = selectedVisualIdx();
+          let start = Math.max(0, target - Math.floor(VISIBLE_COUNT / 2));
+          if (start + VISIBLE_COUNT > list.length) {
+            start = Math.max(0, list.length - VISIBLE_COUNT);
           }
           return {
             start,
-            end: Math.min(total, start + VISIBLE_COUNT),
+            end: Math.min(list.length, start + VISIBLE_COUNT),
           };
         });
 
-        const visibleModels = createMemo(() => {
+        const visibleEntries = createMemo(() => {
           const { start, end } = visibleRange();
-          return models().slice(start, end);
+          return visualData().entries.slice(start, end);
         });
 
         const selectCurrentModel = async () => {
@@ -192,20 +340,20 @@ export default Plugin.define({
                 model: { providerID: m.providerID, id: m.id },
               });
               context.ui.toast.show({
-                title: "Modelo Ativo Alterado",
+                title: "Active Model Switched",
                 message: `${m.name || m.id} (${m.providerID})`,
                 variant: "success",
               });
             } catch (err: any) {
               context.ui.toast.show({
-                title: "Erro ao trocar modelo",
-                message: err?.message || "Falha ao acionar switchModel",
+                title: "Error switching model",
+                message: err?.message || "Failed to switch model",
                 variant: "danger",
               });
             }
           } else {
             context.ui.toast.show({
-              title: "Modelo Selecionado",
+              title: "Model Selected",
               message: `${m.name || m.id}`,
               variant: "info",
             });
@@ -213,7 +361,6 @@ export default Plugin.define({
           close();
         };
 
-        // Alterna status de favorito (Ctrl+F)
         const toggleFavorite = async () => {
           const m = currentModel();
           if (!m) return;
@@ -225,15 +372,15 @@ export default Plugin.define({
             if (idx >= 0) {
               draft.ids.splice(idx, 1);
               context.ui.toast.show({
-                title: "Favoritos",
-                message: `Removido dos favoritos: ${m.name || m.id}`,
+                title: "Favorites",
+                message: `Removed from favorites: ${m.name || m.id}`,
                 variant: "info",
               });
             } else {
               draft.ids.push(id);
               context.ui.toast.show({
-                title: "Favoritos",
-                message: `★ Marcado como favorito: ${m.name || m.id}`,
+                title: "Favorites",
+                message: `★ Added to favorites: ${m.name || m.id}`,
                 variant: "success",
               });
             }
@@ -248,14 +395,14 @@ export default Plugin.define({
             const fresh = (await pricingRpc.getPrices()) as PricingMatrix;
             setPrices(fresh);
             context.ui.toast.show({
-              title: "Preços Sincronizados",
-              message: `${res.count} modelos atualizados.`,
+              title: "Prices Synchronized",
+              message: `${res.count} models updated.`,
               variant: "success",
             });
           } catch (e: any) {
             context.ui.toast.show({
-              title: "Erro ao sincronizar",
-              message: e?.message || "Falha de rede.",
+              title: "Sync Error",
+              message: e?.message || "Network error.",
               variant: "danger",
             });
           } finally {
@@ -263,206 +410,445 @@ export default Plugin.define({
           }
         };
 
+        const clearSearch = () => {
+          if (inputRef) {
+            inputRef.value = "";
+            inputRef.focus();
+          }
+          setSearchQuery("");
+          setSelectedIndex(0);
+        };
+
+        const handleItemClick = (idx: number) => {
+          const now = Date.now();
+          if (idx === selectedIndex() && now - lastClickTime < 400) {
+            selectCurrentModel();
+          } else {
+            setSelectedIndex(idx);
+          }
+          lastClickTime = now;
+        };
+
         context.keymap.layer(() => ({
           mode: "modal",
           commands: [
             {
-              bind: "down,j",
-              title: "Avançar",
-              group: "Navegação",
-              run: () => setSelectedIndex((i) => Math.min(i + 1, models().length - 1)),
+              bind: "down,ctrl+n",
+              title: "Next",
+              group: "Navigation",
+              run: () => {
+                const max = totalSelectable() - 1;
+                if (max > 0) setSelectedIndex((i) => Math.min(i + 1, max));
+              },
             },
             {
-              bind: "up,k",
-              title: "Recuar",
-              group: "Navegação",
+              bind: "up,ctrl+p",
+              title: "Previous",
+              group: "Navigation",
               run: () => setSelectedIndex((i) => Math.max(i - 1, 0)),
             },
             {
               bind: "pagedown",
-              title: "Página Abaixo",
-              group: "Navegação",
-              run: () => setSelectedIndex((i) => Math.min(i + 6, models().length - 1)),
+              title: "Page Down",
+              group: "Navigation",
+              run: () => {
+                const max = totalSelectable() - 1;
+                if (max > 0) setSelectedIndex((i) => Math.min(i + 6, max));
+              },
             },
             {
               bind: "pageup",
-              title: "Página Acima",
-              group: "Navegação",
+              title: "Page Up",
+              group: "Navigation",
               run: () => setSelectedIndex((i) => Math.max(i - 6, 0)),
             },
             {
               bind: "return",
-              title: "Confirmar Seleção",
-              group: "Ação",
+              title: "Confirm Selection",
+              group: "Action",
               run: selectCurrentModel,
             },
             {
               bind: "ctrl+f",
-              title: "Favoritar",
-              group: "Ação",
+              title: "Toggle Favorite",
+              group: "Action",
               run: toggleFavorite,
             },
             {
               bind: "ctrl+r",
-              title: "Forçar Atualização",
-              group: "Ação",
+              title: "Force Refresh",
+              group: "Action",
               run: handleForceRefresh,
             },
             {
               bind: "escape",
-              title: "Fechar",
-              group: "Ação",
-              run: close,
+              title: "Close",
+              group: "Action",
+              run: () => {
+                if (searchQuery().length > 0) {
+                  clearSearch();
+                } else {
+                  close();
+                }
+              },
             },
           ],
         }));
 
         return (
-          <box flexDirection="column" paddingLeft={1} paddingRight={1} gap={1}>
-            {/* Cabeçalho */}
-            <box flexDirection="row" justifyContent="space-between" borderBottom={true} paddingBottom={1}>
+          <box
+            flexDirection="column"
+            paddingLeft={1}
+            paddingRight={1}
+            gap={1}
+            onKeyDown={(key: any) => {
+              // Fallback: If printable key is pressed before input gets focus, insert it directly
+              if (
+                !key.ctrl &&
+                !key.alt &&
+                !key.meta &&
+                key.sequence &&
+                key.sequence.length === 1 &&
+                key.sequence >= " "
+              ) {
+                if (inputRef && inputRef.value === "") {
+                  inputRef.focus();
+                  inputRef.insertText(key.sequence);
+                }
+              }
+            }}
+          >
+            {/* Header */}
+            <box
+              flexDirection="row"
+              justifyContent="space-between"
+              borderBottom={true}
+              paddingBottom={1}
+            >
               <text bold fg={theme().text?.base || "white"}>
-                ⚡ Seleção de Modelos & Custos de Tokens
+                ⚡ Model Selection & Token Pricing
               </text>
               <box flexDirection="row" gap={1}>
                 <text fg={theme().text?.muted || "gray"}>
-                  [{selectedIndex() + 1}/{models().length}]
+                  [{totalSelectable() > 0 ? selectedIndex() + 1 : 0}/
+                  {totalSelectable()}]
                 </text>
-                <text fg={theme().text?.muted || "gray"} onMouseUp={close}>
-                  [Esc]
-                </text>
+                <box onMouseDown={close} onMouseUp={close} paddingLeft={1}>
+                  <text fg={theme().text?.muted || "gray"}>[Esc]</text>
+                </box>
               </box>
             </box>
 
-            {/* Corpo Dividido Amplo: 58% para a lista e 42% para a área secundária */}
-            <box flexDirection="row" gap={2}>
-              {/* Coluna 1: Lista Navegável com estrelas de favorito no topo */}
-              <box width="58%" flexDirection="column" borderRight={true} paddingRight={2}>
-                <For each={visibleModels()}>
-                  {(m, idx) => {
-                    const actualIdx = () => visibleRange().start + idx();
-                    const isSelected = () => actualIdx() === selectedIndex();
-                    const fav = () => isFavorite(m.id);
+            {/* Search Input Bar */}
+            <box
+              flexDirection="row"
+              alignItems="center"
+              borderBottom={true}
+              paddingBottom={1}
+              gap={1}
+              onMouseDown={() => inputRef?.focus()}
+              onMouseUp={() => inputRef?.focus()}
+            >
+              <text bold fg={theme().text?.selected || "cyan"}>
+                Search:
+              </text>
+              <box flexGrow={1} flexDirection="row" alignItems="center">
+                <input
+                  ref={(el: any) => {
+                    inputRef = el;
+                    if (el) el.focus();
+                  }}
+                  placeholder="Type to filter models (name, id, provider)..."
+                  onInput={(val: string) => {
+                    setSearchQuery(val || "");
+                    setSelectedIndex(0);
+                  }}
+                  focused={true}
+                  paddingLeft={3}
+                />
+              </box>
+              <Show when={searchQuery().length > 0}>
+                <box
+                  onMouseDown={clearSearch}
+                  onMouseUp={clearSearch}
+                  paddingLeft={1}
+                >
+                  <text fg={theme().text?.muted || "gray"}>[Clear]</text>
+                </box>
+              </Show>
+            </box>
 
-                    return (
-                      <box
-                        paddingLeft={1}
-                        paddingRight={1}
-                        flexDirection="row"
-                        justifyContent="space-between"
-                        gap={2}
-                        onMouseUp={() => {
-                          setSelectedIndex(actualIdx());
-                          selectCurrentModel();
-                        }}
-                      >
-                        <box flexDirection="row">
-                          <text
-                            bold={isSelected()}
-                            fg={
-                              isSelected()
-                                ? (theme().text?.selected || "cyan")
-                                : (theme().text?.base || "white")
-                            }
-                            wrap="never"
+            {/* Split Screen Body: Left (Grouped List) | Right (Details Card) */}
+            <box flexDirection="row" gap={2}>
+              {/* Column 1: Model List with Mouse Scroll & Click Selection */}
+              <box
+                width="58%"
+                flexDirection="column"
+                borderRight={true}
+                paddingRight={2}
+                onMouse={(e: any) => {
+                  if (e.type === "scroll") {
+                    const dir =
+                      e.scroll?.direction || (e.deltaY > 0 ? "down" : "up");
+                    if (dir === "up" || e.deltaY < 0) {
+                      setSelectedIndex((i) => Math.max(i - 1, 0));
+                    } else {
+                      const max = totalSelectable() - 1;
+                      if (max > 0)
+                        setSelectedIndex((i) => Math.min(i + 1, max));
+                    }
+                  }
+                }}
+              >
+                <Show
+                  when={visibleEntries().length > 0}
+                  fallback={
+                    <box paddingY={2} paddingLeft={1}>
+                      <text fg={theme().text?.muted || "gray"}>
+                        No models matching "{searchQuery()}"
+                      </text>
+                    </box>
+                  }
+                >
+                  <For each={visibleEntries()}>
+                    {(entry) => {
+                      if (entry.type === "header") {
+                        return (
+                          <box
+                            paddingTop={1}
+                            paddingBottom={0}
+                            paddingLeft={1}
+                            flexDirection="row"
                           >
-                            {isSelected() ? "▶ " : "  "}
-                          </text>
-                          <text fg={fav() ? "yellow" : "gray"} bold={fav()} wrap="never">
-                            {fav() ? "★ " : "  "}
-                          </text>
-                          <text
-                            bold={isSelected()}
-                            fg={
-                              isSelected()
-                                ? (theme().text?.selected || "cyan")
-                                : (theme().text?.base || "white")
-                            }
-                            wrap="never"
-                          >
-                            {m.name || m.id}
+                            <text
+                              bold
+                              fg={
+                                entry.isFav
+                                  ? "yellow"
+                                  : theme().text?.selected || "cyan"
+                              }
+                              wrap="never"
+                            >
+                              {entry.isFav ? "★ " : ""}
+                              {entry.title}
+                            </text>
+                          </box>
+                        );
+                      }
+
+                      const isSelected = () =>
+                        entry.modelIndex === selectedIndex();
+
+                      return (
+                        <box
+                          paddingLeft={1}
+                          paddingRight={1}
+                          flexDirection="row"
+                          justifyContent="space-between"
+                          gap={2}
+                          onMouseDown={() => handleItemClick(entry.modelIndex)}
+                          onMouseUp={() => handleItemClick(entry.modelIndex)}
+                        >
+                          <box flexDirection="row">
+                            <text
+                              bold={isSelected()}
+                              fg={
+                                isSelected()
+                                  ? theme().text?.selected || "cyan"
+                                  : theme().text?.base || "white"
+                              }
+                              wrap="never"
+                            >
+                              {isSelected() ? "▶ " : "  "}
+                            </text>
+                            <Show when={entry.isFav}>
+                              <text fg="yellow" bold wrap="never">
+                                ★{" "}
+                              </text>
+                            </Show>
+                            <text
+                              bold={isSelected()}
+                              fg={
+                                isSelected()
+                                  ? theme().text?.selected || "cyan"
+                                  : theme().text?.base || "white"
+                              }
+                              wrap="never"
+                            >
+                              {entry.model.name || entry.model.id}
+                            </text>
+                          </box>
+                          <text fg={theme().text?.muted || "gray"} wrap="never">
+                            {entry.model.providerID || ""}
                           </text>
                         </box>
-                        <text fg={theme().text?.muted || "gray"} wrap="never">
-                          {m.providerID || ""}
-                        </text>
-                      </box>
-                    );
-                  }}
-                </For>
+                      );
+                    }}
+                  </For>
+                </Show>
               </box>
 
-              {/* Coluna 2: Área Secundária de Detalhes e Valores */}
+              {/* Column 2: Secondary Details Card */}
               <box width="42%" flexDirection="column" paddingLeft={1}>
-                <Show when={currentModel()}>
+                <Show
+                  when={currentModel()}
+                  fallback={
+                    <box paddingY={2}>
+                      <text fg={theme().text?.muted || "gray"}>
+                        No model selected
+                      </text>
+                    </box>
+                  }
+                >
                   {(m) => {
                     const p = currentPrice;
                     const fav = () => isFavorite(m().id);
                     return (
                       <box flexDirection="column" gap={1}>
-                        {/* Nome, Provedor e Tag de Favorito */}
+                        {/* Title, Provider and Clickable Favorite Toggle */}
                         <box flexDirection="column">
-                          <box flexDirection="row" justifyContent="space-between">
-                            <text bold fg={theme().text?.selected || "cyan"} wrap="never">
-                              {fav() ? "★ " : ""}{m().name || m().id}
+                          <box
+                            flexDirection="row"
+                            justifyContent="space-between"
+                          >
+                            <text
+                              bold
+                              fg={theme().text?.selected || "cyan"}
+                              wrap="never"
+                            >
+                              {fav() ? "★ " : ""}
+                              {m().name || m().id}
                             </text>
-                            <Show when={fav()}>
-                              <text bold fg="yellow" wrap="never">
-                                [Favorito]
+                            <box
+                              onMouseDown={toggleFavorite}
+                              onMouseUp={toggleFavorite}
+                              paddingLeft={1}
+                            >
+                              <text
+                                bold
+                                fg={fav() ? "yellow" : "gray"}
+                                wrap="never"
+                              >
+                                {fav() ? "★ [Favorited]" : "☆ [Favorite]"}
                               </text>
-                            </Show>
+                            </box>
                           </box>
                           <text fg={theme().text?.muted || "gray"} wrap="never">
                             {m().providerID} • {m().id}
                           </text>
                         </box>
 
-                        {/* Tabela de Preços Formatada */}
+                        {/* Formatted Pricing Table */}
                         <box
                           paddingX={1}
                           paddingY={1}
                           border={true}
                           flexDirection="column"
                         >
-                          <box flexDirection="row" justifyContent="space-between">
-                            <text fg={theme().text?.muted || "gray"} wrap="never">Input:</text>
-                            <text bold fg={theme().text?.base || "white"} wrap="never">
+                          <box
+                            flexDirection="row"
+                            justifyContent="space-between"
+                          >
+                            <text
+                              fg={theme().text?.muted || "gray"}
+                              wrap="never"
+                            >
+                              Input:
+                            </text>
+                            <text
+                              bold
+                              fg={theme().text?.base || "white"}
+                              wrap="never"
+                            >
                               {formatUSD(p().inputPerMillion)} / 1M
                             </text>
                           </box>
 
-                          <box flexDirection="row" justifyContent="space-between">
-                            <text fg={theme().text?.muted || "gray"} wrap="never">Output:</text>
-                            <text bold fg={theme().text?.base || "white"} wrap="never">
+                          <box
+                            flexDirection="row"
+                            justifyContent="space-between"
+                          >
+                            <text
+                              fg={theme().text?.muted || "gray"}
+                              wrap="never"
+                            >
+                              Output:
+                            </text>
+                            <text
+                              bold
+                              fg={theme().text?.base || "white"}
+                              wrap="never"
+                            >
                               {formatUSD(p().outputPerMillion)} / 1M
                             </text>
                           </box>
 
-                          <box flexDirection="row" justifyContent="space-between">
-                            <text fg={theme().text?.muted || "gray"} wrap="never">Cache Read:</text>
-                            <text bold fg={theme().text?.base || "white"} wrap="never">
+                          <box
+                            flexDirection="row"
+                            justifyContent="space-between"
+                          >
+                            <text
+                              fg={theme().text?.muted || "gray"}
+                              wrap="never"
+                            >
+                              Cache Read:
+                            </text>
+                            <text
+                              bold
+                              fg={theme().text?.base || "white"}
+                              wrap="never"
+                            >
                               {formatUSD(p().cacheReadPerMillion)} / 1M
                             </text>
                           </box>
 
-                          <box flexDirection="row" justifyContent="space-between">
-                            <text fg={theme().text?.muted || "gray"} wrap="never">Cache Write:</text>
-                            <text bold fg={theme().text?.base || "white"} wrap="never">
+                          <box
+                            flexDirection="row"
+                            justifyContent="space-between"
+                          >
+                            <text
+                              fg={theme().text?.muted || "gray"}
+                              wrap="never"
+                            >
+                              Cache Write:
+                            </text>
+                            <text
+                              bold
+                              fg={theme().text?.base || "white"}
+                              wrap="never"
+                            >
                               {formatUSD(p().cacheWritePerMillion)} / 1M
                             </text>
                           </box>
                         </box>
 
-                        {/* Metadados Técnicos */}
+                        {/* Technical Metadata */}
                         <box flexDirection="column">
                           <text fg={theme().text?.muted || "gray"} wrap="never">
-                            Contexto: {p().contextLimit?.toLocaleString() ?? "N/D"} tokens
+                            Context:{" "}
+                            {p().contextLimit?.toLocaleString() ?? "N/A"} tokens
                           </text>
                           <text fg={theme().text?.muted || "gray"} wrap="never">
-                            Max Output: {p().outputLimit?.toLocaleString() ?? "N/D"} tokens
+                            Max Output:{" "}
+                            {p().outputLimit?.toLocaleString() ?? "N/A"} tokens
                           </text>
                           <text fg={theme().text?.muted || "gray"} wrap="never">
-                            Origem: {p().source || "models.dev"}
+                            Source: {p().source || "models.dev"}
+                          </text>
+                        </box>
+
+                        {/* Clickable Select Button */}
+                        <box
+                          marginTop={1}
+                          paddingLeft={2}
+                          paddingRight={2}
+                          border={true}
+                          onMouseDown={selectCurrentModel}
+                          onMouseUp={selectCurrentModel}
+                          alignSelf="flex-start"
+                        >
+                          <text bold fg={theme().text?.selected || "cyan"}>
+                            ▶ Select Model [Enter]
                           </text>
                         </box>
                       </box>
@@ -472,16 +858,31 @@ export default Plugin.define({
               </box>
             </box>
 
-            {/* Rodapé com atalho Ctrl+F */}
-            <box borderTop={true} paddingTop={1} flexDirection="row" justifyContent="space-between">
+            {/* Footer with keymap shortcuts & clickable actions */}
+            <box
+              borderTop={true}
+              paddingTop={1}
+              flexDirection="row"
+              justifyContent="space-between"
+            >
               <text fg={theme().text?.muted || "gray"}>
-                ↑/↓ Navegar  |  Enter Escolher  |  Ctrl+F Favoritar (★)  |  Ctrl+R Atualizar
+                Type to Search | ↑/↓ Scroll | Click/Enter Select | Ctrl+F
+                Favorite | Ctrl+R Refresh
               </text>
-              <Show when={isRefreshing()}>
-                <text bold fg="yellow">
-                  Atualizando...
-                </text>
-              </Show>
+              <box flexDirection="row" gap={1}>
+                <Show when={isRefreshing()}>
+                  <text bold fg="yellow">
+                    Refreshing...
+                  </text>
+                </Show>
+                <box
+                  onMouseDown={handleForceRefresh}
+                  onMouseUp={handleForceRefresh}
+                  paddingLeft={1}
+                >
+                  <text fg={theme().text?.muted || "gray"}>[Refresh]</text>
+                </box>
+              </box>
             </box>
           </box>
         );

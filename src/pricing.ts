@@ -25,7 +25,7 @@ export async function fetchExternalPricing(): Promise<PricingMatrix> {
   try {
     const res = await fetch(MODELS_DEV_URL);
     if (!res.ok) {
-      console.warn(`[model-pricing] Falha ao buscar de ${MODELS_DEV_URL}: HTTP ${res.status}`);
+      console.warn(`[model-pricing] Failed to fetch from ${MODELS_DEV_URL}: HTTP ${res.status}`);
       return result;
     }
     const data = (await res.json()) as Record<string, ModelsDevProvider>;
@@ -63,7 +63,7 @@ export async function fetchExternalPricing(): Promise<PricingMatrix> {
       }
     }
   } catch (error) {
-    console.error("[model-pricing] Erro ao buscar preços externos:", error);
+    console.error("[model-pricing] Error fetching external prices:", error);
   }
   return result;
 }
