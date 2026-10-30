@@ -97,6 +97,10 @@ Selecting a model is a real switch, not just a UI highlight:
 4. On failure the dialog stays open and shows the error, so the previous model
    remains untouched. Selecting the already active model does not round-trip.
 
+> **Note:** When no session is active, selecting a model does not switch the
+> model right away. The selection only takes effect when the prompt is executed —
+> on the first prompt of the next new session — not before.
+
 **No session yet.** The dialog works on the home screen too: the choice is
 persisted on the server (`next_model` in plugin storage) and applied to the
 **first prompt of the next new session**. A server-side `session.prompt` hook
