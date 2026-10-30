@@ -3,6 +3,9 @@
   "version": "1.0.0",
   "description": "OpenCode plugin to display model input, output, and cache pricing with daily sync and interactive split-view selector",
   "type": "module",
+  "scripts": {
+    "test": "node --test tests/model-selection.test.ts"
+  },
   "exports": {
     ".": "./src/index.ts",
     "./tui": "./src/tui.tsx",

@@ -1,7 +1,17 @@
 /** @jsxImportSource @opentui/solid */
 import { Plugin } from "@opencode/plugin/tui";
-import { createMemo, createSignal, For, onMount, Show } from "solid-js";
+import { createEffect, createMemo, createSignal, For, onMount, Show } from "solid-js";
 import { formatUSD } from "./pricing.js";
+import {
+  describeModelRef,
+  errorMessage,
+  isSameModel,
+  matchesModelRef,
+  resolveActiveSessionID,
+  toModelTarget,
+  type ModelRefLike,
+  type ModelTarget,
+} from "./model-selection.js";
 import {
   ModelPricingRpc,
   type ModelPriceDetail,
@@ -49,6 +59,64 @@ export default Plugin.define({
       },
     );
 
+    /**
+     * Applies the selected model to the given session through the official
+     * server API and only reports success after the committed session model
+     * matches the selection.
+     *
+     * Returns "unchanged" when the prompt already uses the model, so the
+     * dialog can avoid a redundant round-trip.
+     */
+    async function applySelectedModel(
+      sessionID: string,
+      target: ModelTarget,
+    ): Promise<"applied" | "unchanged"> {
+      if (isSameModel(context.ui.model.current(), target)) return "unchanged";
+
+      try {
+        await context.client.session.switchModel({
+          sessionID,
+          model: { providerID: target.providerID, id: target.modelID },
+        });
+      } catch (error) {
+        throw new Error(`OpenCode rejected the model switch: ${errorMessage(error)}`);
+      }
+
+      // Refresh the TUI session cache so the prompt footer reflects the
+      // committed model even if the `session.model.selected` event is late.
+      try {
+        await context.data.session.sync(sessionID);
+      } catch {
+        // Confirmation below reads the authoritative server state instead.
+      }
+
+      const cached = context.data.session.get(sessionID)?.model;
+      if (matchesModelRef(cached, target)) return "applied";
+
+      let committed: ModelRefLike | undefined;
+      try {
+        committed = (await context.client.session.get({ sessionID }))?.model;
+      } catch (error) {
+        throw new Error(
+          `Unable to confirm the model switch for session ${sessionID}: ${errorMessage(error)}`,
+        );
+      }
+
+      if (matchesModelRef(committed, target)) {
+        try {
+          await context.data.session.sync(sessionID);
+        } catch {
+          // The server already confirmed the switch.
+        }
+        return "applied";
+      }
+
+      throw new Error(
+        `OpenCode did not switch to ${target.providerID}/${target.modelID} ` +
+          `(active model: ${describeModelRef(committed ?? cached)}).`,
+      );
+    }
+
     // Override built-in model.list command with pricing & favorites support
     context.keymap.layer(() => ({
       mode: "global",
@@ -88,7 +156,7 @@ export default Plugin.define({
               context.ui.toast.show({
                 title: "Update Error",
                 message: err?.message || "Failed to synchronize prices.",
-                variant: "danger",
+                variant: "error",
               });
             }
           },
@@ -100,7 +168,10 @@ export default Plugin.define({
       // Load initial local models synchronously for instant 0ms dialog display
       const localModels = context.data.location.model.list() ?? [];
       const location = context.location ?? context.data.location.default();
-      const activeSessionID = context.data.session.list()?.[0]?.id;
+      // Capture the session that owns the prompt at open time. Never fall back
+      // to the first item of `session.list()` (that is the most recently
+      // updated session, not the one being displayed).
+      const sessionID = resolveActiveSessionID(context.ui.router.current());
 
       context.ui.dialog.set({ size: "xlarge", centered: true });
 
@@ -112,9 +183,13 @@ export default Plugin.define({
         const [searchQuery, setSearchQuery] = createSignal("");
         const [prices, setPrices] = createSignal<PricingMatrix>({});
         const [isRefreshing, setIsRefreshing] = createSignal(false);
+        const [isApplying, setIsApplying] = createSignal(false);
+        const [selectionError, setSelectionError] = createSignal<string | null>(null);
 
         let inputRef: any = null;
         let lastClickTime = 0;
+        // Follow the active model until the user moves the selection by hand.
+        let followsActiveModel = true;
 
         onMount(() => {
           // Focus the input immediately on render
@@ -262,6 +337,30 @@ export default Plugin.define({
 
         const totalSelectable = () => visualData().selectable.length;
 
+        /** User-driven selection: stops following the active model. */
+        const setSelection = (index: number) => {
+          followsActiveModel = false;
+          setSelectedIndex(index);
+        };
+
+        const activeModelIndex = () => {
+          const current = context.ui.model.current();
+          if (!current) return -1;
+          return visualData().selectable.findIndex(
+            (m: any) =>
+              m.providerID === current.providerID &&
+              (m.modelID === current.modelID || m.id === current.modelID),
+          );
+        };
+
+        // Keep the prompt's active model highlighted while the catalog and the
+        // favorites store finish hydrating. Stops as soon as the user moves.
+        createEffect(() => {
+          if (!followsActiveModel) return;
+          const index = activeModelIndex();
+          if (index >= 0 && index !== selectedIndex()) setSelectedIndex(index);
+        });
+
         const currentModel = createMemo(() => {
           const list = visualData().selectable;
           if (list.length === 0) return undefined;
@@ -329,36 +428,61 @@ export default Plugin.define({
           return visualData().entries.slice(start, end);
         });
 
+        const handleSelectionError = (message: string) => {
+          setSelectionError(message);
+          context.ui.toast.show({
+            title: "Error switching model",
+            message,
+            variant: "error",
+          });
+        };
+
+        /** Closes the dialog only when no switch is in flight. */
+        const requestClose = () => {
+          if (isApplying()) return;
+          close();
+        };
+
         const selectCurrentModel = async () => {
+          if (isApplying()) return;
+
           const m = currentModel();
           if (!m) return;
 
-          if (activeSessionID) {
-            try {
-              await context.client.session.switchModel({
-                sessionID: activeSessionID,
-                model: { providerID: m.providerID, id: m.id },
-              });
-              context.ui.toast.show({
-                title: "Active Model Switched",
-                message: `${m.name || m.id} (${m.providerID})`,
-                variant: "success",
-              });
-            } catch (err: any) {
-              context.ui.toast.show({
-                title: "Error switching model",
-                message: err?.message || "Failed to switch model",
-                variant: "danger",
-              });
-            }
-          } else {
-            context.ui.toast.show({
-              title: "Model Selected",
-              message: `${m.name || m.id}`,
-              variant: "info",
-            });
+          setSelectionError(null);
+
+          if (!sessionID) {
+            handleSelectionError(
+              "No active session. Open a session before selecting a model.",
+            );
+            return;
           }
-          close();
+
+          let target: ModelTarget;
+          try {
+            target = toModelTarget(m);
+          } catch (error) {
+            handleSelectionError(errorMessage(error));
+            return;
+          }
+
+          setIsApplying(true);
+          try {
+            const result = await applySelectedModel(sessionID, target);
+            context.ui.toast.show({
+              title:
+                result === "applied"
+                  ? "Active Model Switched"
+                  : "Model already active",
+              message: `${m.name || target.modelID} (${target.providerID})`,
+              variant: result === "applied" ? "success" : "info",
+            });
+            setIsApplying(false);
+            close();
+          } catch (error) {
+            setIsApplying(false);
+            handleSelectionError(errorMessage(error));
+          }
         };
 
         const toggleFavorite = async () => {
@@ -403,7 +527,7 @@ export default Plugin.define({
             context.ui.toast.show({
               title: "Sync Error",
               message: e?.message || "Network error.",
-              variant: "danger",
+              variant: "error",
             });
           } finally {
             setIsRefreshing(false);
@@ -416,7 +540,7 @@ export default Plugin.define({
             inputRef.focus();
           }
           setSearchQuery("");
-          setSelectedIndex(0);
+          setSelection(0);
         };
 
         const handleItemClick = (idx: number) => {
@@ -424,7 +548,7 @@ export default Plugin.define({
           if (idx === selectedIndex() && now - lastClickTime < 400) {
             selectCurrentModel();
           } else {
-            setSelectedIndex(idx);
+            setSelection(idx);
           }
           lastClickTime = now;
         };
@@ -438,14 +562,14 @@ export default Plugin.define({
               group: "Navigation",
               run: () => {
                 const max = totalSelectable() - 1;
-                if (max > 0) setSelectedIndex((i) => Math.min(i + 1, max));
+                if (max > 0) setSelection(Math.min(selectedIndex() + 1, max));
               },
             },
             {
               bind: "up,ctrl+p",
               title: "Previous",
               group: "Navigation",
-              run: () => setSelectedIndex((i) => Math.max(i - 1, 0)),
+              run: () => setSelection(Math.max(selectedIndex() - 1, 0)),
             },
             {
               bind: "pagedown",
@@ -453,14 +577,14 @@ export default Plugin.define({
               group: "Navigation",
               run: () => {
                 const max = totalSelectable() - 1;
-                if (max > 0) setSelectedIndex((i) => Math.min(i + 6, max));
+                if (max > 0) setSelection(Math.min(selectedIndex() + 6, max));
               },
             },
             {
               bind: "pageup",
               title: "Page Up",
               group: "Navigation",
-              run: () => setSelectedIndex((i) => Math.max(i - 6, 0)),
+              run: () => setSelection(Math.max(selectedIndex() - 6, 0)),
             },
             {
               bind: "return",
@@ -488,7 +612,7 @@ export default Plugin.define({
                 if (searchQuery().length > 0) {
                   clearSearch();
                 } else {
-                  close();
+                  requestClose();
                 }
               },
             },
@@ -533,7 +657,7 @@ export default Plugin.define({
                   [{totalSelectable() > 0 ? selectedIndex() + 1 : 0}/
                   {totalSelectable()}]
                 </text>
-                <box onMouseDown={close} onMouseUp={close} paddingLeft={1}>
+                <box onMouseDown={requestClose} onMouseUp={requestClose} paddingLeft={1}>
                   <text fg={theme().text?.muted || "gray"}>[Esc]</text>
                 </box>
               </box>
@@ -561,7 +685,7 @@ export default Plugin.define({
                   placeholder="Type to filter models (name, id, provider)..."
                   onInput={(val: string) => {
                     setSearchQuery(val || "");
-                    setSelectedIndex(0);
+                    setSelection(0);
                   }}
                   focused={true}
                   paddingLeft={3}
@@ -591,11 +715,11 @@ export default Plugin.define({
                     const dir =
                       e.scroll?.direction || (e.deltaY > 0 ? "down" : "up");
                     if (dir === "up" || e.deltaY < 0) {
-                      setSelectedIndex((i) => Math.max(i - 1, 0));
+                      setSelection(Math.max(selectedIndex() - 1, 0));
                     } else {
                       const max = totalSelectable() - 1;
                       if (max > 0)
-                        setSelectedIndex((i) => Math.min(i + 1, max));
+                        setSelection(Math.min(selectedIndex() + 1, max));
                     }
                   }
                 }}
@@ -848,7 +972,9 @@ export default Plugin.define({
                           alignSelf="flex-start"
                         >
                           <text bold fg={theme().text?.selected || "cyan"}>
-                            ▶ Select Model [Enter]
+                            {isApplying()
+                              ? "Applying..."
+                              : "▶ Select Model [Enter]"}
                           </text>
                         </box>
                       </box>
@@ -857,6 +983,15 @@ export default Plugin.define({
                 </Show>
               </box>
             </box>
+
+            {/* Inline error: the dialog stays open so the user can retry */}
+            <Show when={selectionError()}>
+              <box border={true} paddingLeft={1} paddingRight={1}>
+                <text fg="red" wrap="word">
+                  ✖ {selectionError()}
+                </text>
+              </box>
+            </Show>
 
             {/* Footer with keymap shortcuts & clickable actions */}
             <box
@@ -870,6 +1005,11 @@ export default Plugin.define({
                 Favorite | Ctrl+R Refresh
               </text>
               <box flexDirection="row" gap={1}>
+                <Show when={isApplying()}>
+                  <text bold fg="yellow">
+                    Switching model...
+                  </text>
+                </Show>
                 <Show when={isRefreshing()}>
                   <text bold fg="yellow">
                     Refreshing...

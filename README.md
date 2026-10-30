@@ -37,7 +37,8 @@ A plugin for **OpenCode v2** that displays detailed token costs for **Input**, *
   - `Mouse Click`: Click to highlight, double-click or click `[ Select Model ]` to confirm. Click `[ Favorite ]` to toggle favorite status.
   - `↑` / `↓` or `Ctrl+P` / `Ctrl+N`: Navigate through filtered models.
   - `PageUp` / `PageDown`: Jump across batches of models.
-  - `Enter`: Select the highlighted model for the active session and close the dialog.
+  - `Enter`: Applies the highlighted model to the session that owns the open prompt, then closes the dialog only after OpenCode confirms the switch.
+  - The model currently used by the prompt is preselected when the dialog opens (and stays highlighted until you move with the arrow keys).
   - `Ctrl + F`: Toggle the highlighted model as **Favorite (★)** (pinned to the top group).
   - `Ctrl + R`: Force real-time price synchronization directly from within the modal.
   - `Esc`: Clear search filter, or close the dialog if the search query is empty.
@@ -83,6 +84,28 @@ Open your global `opencode.jsonc` file (`~/.config/opencode/opencode.jsonc`) and
 
 ---
 
+## 🎛️ Model Switching
+
+Selecting a model is a real switch, not just a UI highlight:
+
+1. The dialog captures the session that owns the prompt when it opens
+   (`context.ui.router.current()`), never the first entry of the session list.
+2. `Enter` / `Select Model` calls `session.switchModel` with the catalog
+   `providerID` and `modelID`.
+3. The plugin refreshes the session cache and checks the committed
+   `session.model`; it only closes and reports success after the model matches.
+4. On failure the dialog stays open and shows the error, so the previous model
+   remains untouched. Selecting the already active model does not round-trip.
+
+Limitations: the home screen has no session to switch, so the dialog asks you
+to open a session first. Changing the model resets the variant to the model
+default; selecting the current model keeps it.
+
+The API investigation behind this behavior is documented in
+[`docs/model-selection-investigation.md`](docs/model-selection-investigation.md).
+
+---
+
 ## 📁 Project Structure
 
 ```text
@@ -90,14 +113,28 @@ opencode-model-pricing/
 ├── package.json        # Plugin manifest (exports for server, tui, and rpc)
 ├── tsconfig.json       # TypeScript and JSX configuration for OpenTUI/SolidJS
 ├── README.md           # Documentation and usage guide
+├── docs/
+│   └── model-selection-investigation.md   # Official API findings for model switching
+├── tests/
+│   └── model-selection.test.ts            # Unit tests for session/model helpers
 └── src/
     ├── images/         # UI preview screenshots and assets
     │   └── model-window.png
     ├── rpc.ts          # RPC contract with Standard Schema for inter-process communication
     ├── pricing.ts      # Data fetching, normalization, and USD formatting
+    ├── model-selection.ts  # Pure helpers: active session and model identifiers
     ├── index.ts        # OpenCode server daemon: daily sync, storage, and slash commands
     └── tui.tsx         # TUI (CLI) interface: xlarge split-view modal and keymaps
 ```
+
+## 🧪 Development
+
+```bash
+npm test          # node --test tests/model-selection.test.ts
+```
+
+The helper module (`src/model-selection.ts`) is intentionally free of
+OpenTUI/Solid imports so it can be tested without the TUI runtime.
 
 ---
 
