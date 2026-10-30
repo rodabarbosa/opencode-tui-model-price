@@ -37,8 +37,8 @@ A plugin for **OpenCode v2** that displays detailed token costs for **Input**, *
   - `Mouse Click`: Click to highlight, double-click or click `[ Select Model ]` to confirm. Click `[ Favorite ]` to toggle favorite status.
   - `↑` / `↓` or `Ctrl+P` / `Ctrl+N`: Navigate through filtered models.
   - `PageUp` / `PageDown`: Jump across batches of models.
-  - `Enter`: Applies the highlighted model to the session that owns the open prompt, then closes the dialog only after OpenCode confirms the switch.
-  - The model currently used by the prompt is preselected when the dialog opens (and stays highlighted until you move with the arrow keys).
+  - `Enter`: Applies the highlighted model to the session that owns the open prompt, then closes the dialog only after OpenCode confirms the switch. On the home screen (no session yet) it stores the model for the first prompt of the next new session instead of failing.
+  - The model currently used by the prompt is preselected when the dialog opens (and stays highlighted until you move with the arrow keys). With no session, the stored next-session model is highlighted.
   - `Ctrl + F`: Toggle the highlighted model as **Favorite (★)** (pinned to the top group).
   - `Ctrl + R`: Force real-time price synchronization directly from within the modal.
   - `Esc`: Clear search filter, or close the dialog if the search query is empty.
@@ -97,12 +97,18 @@ Selecting a model is a real switch, not just a UI highlight:
 4. On failure the dialog stays open and shows the error, so the previous model
    remains untouched. Selecting the already active model does not round-trip.
 
-Limitations: the home screen has no session to switch, so the dialog asks you
-to open a session first. Changing the model resets the variant to the model
-default; selecting the current model keeps it.
+**No session yet.** The dialog works on the home screen too: the choice is
+persisted on the server (`next_model` in plugin storage) and applied to the
+**first prompt of the next new session**. A server-side `session.prompt` hook
+runs before admission, so the same request that opens the session already uses
+the chosen model; no artificial session is created. The preference survives
+restarts until it is consumed, and child (subagent) sessions and sessions that
+already have a conversation are never touched. Picking the model OpenCode
+already shows clears the stored preference.
 
-The API investigation behind this behavior is documented in
-[`docs/model-selection-investigation.md`](docs/model-selection-investigation.md).
+Changing the model inside a session resets the variant to the model default;
+selecting the current model keeps it. Aliased models are switched by their
+catalog ID (`id`), not by the provider-facing `modelID`.
 
 ---
 
@@ -113,8 +119,6 @@ opencode-model-pricing/
 ├── package.json        # Plugin manifest (exports for server, tui, and rpc)
 ├── tsconfig.json       # TypeScript and JSX configuration for OpenTUI/SolidJS
 ├── README.md           # Documentation and usage guide
-├── docs/
-│   └── model-selection-investigation.md   # Official API findings for model switching
 ├── tests/
 │   └── model-selection.test.ts            # Unit tests for session/model helpers
 └── src/
@@ -122,8 +126,8 @@ opencode-model-pricing/
     │   └── model-window.png
     ├── rpc.ts          # RPC contract with Standard Schema for inter-process communication
     ├── pricing.ts      # Data fetching, normalization, and USD formatting
-    ├── model-selection.ts  # Pure helpers: active session and model identifiers
-    ├── index.ts        # OpenCode server daemon: daily sync, storage, and slash commands
+    ├── model-selection.ts  # Pure helpers: session, model identifiers, next-session rules
+    ├── index.ts        # OpenCode server daemon: daily sync, storage, prompt hook, RPC
     └── tui.tsx         # TUI (CLI) interface: xlarge split-view modal and keymaps
 ```
 

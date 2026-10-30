@@ -7,6 +7,7 @@ import {
   errorMessage,
   isSameModel,
   matchesModelRef,
+  parseStoredModel,
   resolveActiveSessionID,
   toModelTarget,
   type ModelRefLike,
@@ -164,7 +165,21 @@ export default Plugin.define({
       ],
     }));
 
-    function openPricingModelDialog() {
+    async function openPricingModelDialog() {
+      // Model chosen while no session exists. The server plugin applies it to the
+      // first prompt of the next new session (prompt hook + `session.switchModel`),
+      // because OpenCode's composer only accepts a model change for a session.
+      //
+      // Resolve the stored preference before opening so the banner and the
+      // highlighted row are consistent on first paint.
+      let pendingModel: ModelTarget | null = null;
+      try {
+        const res: any = await pricingRpc.getNextModel();
+        pendingModel = parseStoredModel(res?.model) ?? null;
+      } catch {
+        // No server-side preference (or RPC unavailable): nothing to preload.
+      }
+
       // Load initial local models synchronously for instant 0ms dialog display
       const localModels = context.data.location.model.list() ?? [];
       const location = context.location ?? context.data.location.default();
@@ -344,7 +359,11 @@ export default Plugin.define({
         };
 
         const activeModelIndex = () => {
-          const current = context.ui.model.current();
+          // With no session, highlight the model that the next new session will
+          // actually use: the stored preference wins over the composer model.
+          const current = sessionID
+            ? context.ui.model.current()
+            : pendingModel ?? context.ui.model.current();
           if (!current) return -1;
           return visualData().selectable.findIndex(
             (m: any) =>
@@ -428,10 +447,13 @@ export default Plugin.define({
           return visualData().entries.slice(start, end);
         });
 
-        const handleSelectionError = (message: string) => {
+        const handleSelectionError = (
+          message: string,
+          title = "Error switching model",
+        ) => {
           setSelectionError(message);
           context.ui.toast.show({
-            title: "Error switching model",
+            title,
             message,
             variant: "error",
           });
@@ -443,6 +465,58 @@ export default Plugin.define({
           close();
         };
 
+        /**
+         * Flow A — no session: persist the choice on the server. The prompt hook
+         * applies it to the first prompt of the next new session, so selection
+         * no longer depends on a session existing.
+         *
+         * Picking the model OpenCode already shows clears the stored preference,
+         * which is the way to cancel a previously chosen next-session model.
+         */
+        const selectModelWithoutSession = async (
+          target: ModelTarget,
+          name: string,
+        ) => {
+          const pending = pendingModel;
+          const active = context.ui.model.current();
+
+          if (pending && isSameModel(pending, target)) {
+            context.ui.toast.show({
+              title: "Model already defined",
+              message: `${name} (${target.providerID}) is already the model for the next session.`,
+              variant: "info",
+            });
+            return;
+          }
+
+          if (pending && isSameModel(active, target)) {
+            await pricingRpc.clearNextModel();
+            context.ui.toast.show({
+              title: "Next-session model cleared",
+              message: `The next prompt will use the current model: ${name} (${target.providerID}).`,
+              variant: "info",
+            });
+            return;
+          }
+
+          if (!pending && isSameModel(active, target)) {
+            context.ui.toast.show({
+              title: "Model already selected",
+              message: `${name} (${target.providerID}) is already selected.`,
+              variant: "info",
+            });
+            return;
+          }
+
+          const result: any = await pricingRpc.setNextModel(target);
+          const applied: ModelTarget = result?.model ?? target;
+          context.ui.toast.show({
+            title: "Model Set for Next Session",
+            message: `${name} (${applied.providerID}) will be used by the first prompt of the next session.`,
+            variant: "success",
+          });
+        };
+
         const selectCurrentModel = async () => {
           if (isApplying()) return;
 
@@ -450,13 +524,6 @@ export default Plugin.define({
           if (!m) return;
 
           setSelectionError(null);
-
-          if (!sessionID) {
-            handleSelectionError(
-              "No active session. Open a session before selecting a model.",
-            );
-            return;
-          }
 
           let target: ModelTarget;
           try {
@@ -468,20 +535,27 @@ export default Plugin.define({
 
           setIsApplying(true);
           try {
-            const result = await applySelectedModel(sessionID, target);
-            context.ui.toast.show({
-              title:
-                result === "applied"
-                  ? "Active Model Switched"
-                  : "Model already active",
-              message: `${m.name || target.modelID} (${target.providerID})`,
-              variant: result === "applied" ? "success" : "info",
-            });
+            if (sessionID) {
+              const result = await applySelectedModel(sessionID, target);
+              context.ui.toast.show({
+                title:
+                  result === "applied"
+                    ? "Active Model Switched"
+                    : "Model already active",
+                message: `${m.name || target.modelID} (${target.providerID})`,
+                variant: result === "applied" ? "success" : "info",
+              });
+            } else {
+              await selectModelWithoutSession(target, m.name || target.modelID);
+            }
             setIsApplying(false);
             close();
           } catch (error) {
             setIsApplying(false);
-            handleSelectionError(errorMessage(error));
+            handleSelectionError(
+              errorMessage(error),
+              sessionID ? "Error switching model" : "Error selecting model",
+            );
           }
         };
 
@@ -701,6 +775,29 @@ export default Plugin.define({
                 </box>
               </Show>
             </box>
+
+            {/* No-session guidance: the choice applies to the next new session */}
+            <Show when={!sessionID}>
+              <box paddingLeft={1}>
+                <Show
+                  when={pendingModel}
+                  fallback={
+                    <text fg={theme().text?.muted || "gray"} wrap="word">
+                      No session yet: the model you pick is applied to the first
+                      prompt of the next new session.
+                    </text>
+                  }
+                >
+                  {(pending) => (
+                    <text fg={theme().text?.muted || "gray"} wrap="word">
+                      Next session: {pending().providerID}/
+                      {pending().modelID} — applied to the first prompt of the
+                      next new session.
+                    </text>
+                  )}
+                </Show>
+              </box>
+            </Show>
 
             {/* Split Screen Body: Left (Grouped List) | Right (Details Card) */}
             <box flexDirection="row" gap={2}>
@@ -974,7 +1071,9 @@ export default Plugin.define({
                           <text bold fg={theme().text?.selected || "cyan"}>
                             {isApplying()
                               ? "Applying..."
-                              : "▶ Select Model [Enter]"}
+                              : sessionID
+                                ? "▶ Select Model [Enter]"
+                                : "▶ Set for Next Session [Enter]"}
                           </text>
                         </box>
                       </box>

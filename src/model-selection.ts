@@ -44,8 +44,9 @@ export function resolveActiveSessionID(route: RouteLike | undefined): string | u
 
 /**
  * Normalizes a model from the catalog into the identifiers the server API
- * expects. `modelID` is authoritative; `id` is only a fallback because some
- * providers expose the same value in both fields.
+ * expects. `id` is the catalog identifier used by `session.switchModel`; for
+ * aliased models `modelID` is the provider-facing value, so it is only a
+ * fallback (most providers expose the same value in both fields).
  */
 export function toModelTarget(model: {
   readonly providerID?: string;
@@ -53,9 +54,9 @@ export function toModelTarget(model: {
   readonly id?: string;
 } | undefined): ModelTarget {
   const providerID = typeof model?.providerID === "string" ? model.providerID.trim() : "";
-  const preferredModelID = typeof model?.modelID === "string" ? model.modelID.trim() : "";
-  const fallbackModelID = typeof model?.id === "string" ? model.id.trim() : "";
-  const modelID = preferredModelID || fallbackModelID;
+  const catalogModelID = typeof model?.id === "string" ? model.id.trim() : "";
+  const providerModelID = typeof model?.modelID === "string" ? model.modelID.trim() : "";
+  const modelID = catalogModelID || providerModelID;
 
   if (!providerID) throw new Error("The selected model has no provider ID.");
   if (!modelID) throw new Error("The selected model has no model ID.");
@@ -82,6 +83,38 @@ export function matchesModelRef(ref: ModelRefLike | undefined, target: ModelTarg
 export function describeModelRef(ref: ModelRefLike | undefined): string {
   if (!ref || !ref.providerID || !ref.id) return "unknown";
   return `${ref.providerID}/${ref.id}`;
+}
+
+/**
+ * Narrows a model reference read from plugin storage or received over RPC.
+ * Returns `undefined` for anything that is not a non-empty provider + model
+ * pair, so malformed values never reach `session.switchModel`.
+ */
+export function parseStoredModel(value: unknown): ModelTarget | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  const { providerID, modelID } = value as Record<string, unknown>;
+  if (typeof providerID !== "string" || providerID.trim().length === 0) return undefined;
+  if (typeof modelID !== "string" || modelID.trim().length === 0) return undefined;
+  return { providerID: providerID.trim(), modelID: modelID.trim() };
+}
+
+/**
+ * Whether a pending "next session" preference applies to the prompt being
+ * admitted: only to the first prompt of a new root session. Child sessions
+ * (subagents) and sessions that already have a conversation keep their model.
+ *
+ * Control messages such as `model-switched` do not count as a conversation:
+ * the TUI creates a session and switches its model before sending the first
+ * prompt, so a brand-new session is not necessarily empty.
+ */
+export function shouldApplyNextModel(input: {
+  readonly pending: ModelTarget | undefined;
+  readonly parentID?: string;
+  readonly hasConversation: boolean;
+}): boolean {
+  if (!input.pending) return false;
+  if (input.parentID) return false;
+  return !input.hasConversation;
 }
 
 /** Extracts a message from an unknown thrown value. */
