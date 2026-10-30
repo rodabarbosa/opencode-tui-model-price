@@ -10,27 +10,30 @@ import {
   type ModelTarget,
 } from "./model-selection.js";
 
-/** Storage key prefix for the model applied to the next new session. */
+/**
+ * Storage key for the model applied to the next new session. Global on
+ * purpose: the dialog's RPC and the prompt hook may run in plugin instances
+ * bound to different locations, and a location-scoped key is written by one
+ * instance but never read by another.
+ */
 const NEXT_MODEL_KEY = "next_model";
 
 export default Plugin.define({
   id: "model-pricing",
   async setup(ctx) {
     let memoryMatrix: PricingMatrix = {};
-    // The preference belongs to the project/location the dialog was used in.
-    const nextModelKey = `${NEXT_MODEL_KEY}:${ctx.location?.directory ?? "global"}`;
 
     /** Reads the persisted next-session preference (single source of truth). */
     async function loadNextModel(): Promise<ModelTarget | undefined> {
-      return parseStoredModel(await ctx.storage.get(nextModelKey));
+      return parseStoredModel(await ctx.storage.get(NEXT_MODEL_KEY));
     }
 
     /** Persists (or clears) the preference applied to the next new session. */
     async function persistNextModel(model: ModelTarget | undefined): Promise<void> {
       if (model) {
-        await ctx.storage.set(nextModelKey, model);
+        await ctx.storage.set(NEXT_MODEL_KEY, model);
       } else {
-        await ctx.storage.remove(nextModelKey);
+        await ctx.storage.remove(NEXT_MODEL_KEY);
       }
     }
 
