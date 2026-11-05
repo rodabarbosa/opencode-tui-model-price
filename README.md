@@ -85,13 +85,15 @@ opencode plugin remove rodabarbosa/opencode-tui-model-price             # uninst
 ./install.sh github:someone/fork-of-this-plugin # any npm registry or Git specifier
 ```
 
-### 2. npm registry (after publishing)
+### 2. npm registry
 
-The manifest is publish-ready (`npm publish` creates a 10-file tarball with `src/` and the docs). Once the package is on the registry:
+The package is published as `opencode-model-pricing@1.0.0`:
 
 ```bash
 opencode plugin add opencode-model-pricing
 ```
+
+> **Note:** if your `~/.npmrc` sets `min-release-age` (for example `min-release-age=7`), npm and OpenCode refuse versions published less than that many days ago. Either wait for the release to age or install with `npm_config_min_release_age=0 opencode plugin add opencode-model-pricing`.
 
 ### 3. Manual installation (local checkout)
 

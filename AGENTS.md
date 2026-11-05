@@ -34,8 +34,8 @@ opencode plugin add rodabarbosa/opencode-tui-model-price   # install/update the 
 ## Distribution
 
 The plugin is a publishable package and **must stay installable with
-`opencode plugin add`** — from Git today, from npm once
-`opencode-model-pricing` is published.
+`opencode plugin add`** — from Git and from npm (`opencode-model-pricing`,
+published at 1.0.0).
 
 ```bash
 opencode plugin add rodabarbosa/opencode-tui-model-price   # Git (works now)
@@ -61,7 +61,9 @@ Rules:
   ```
 
   It must print `Plugin "..." installed and added to <config>` and leave the real
-  `~/.config/opencode` untouched.
+  `~/.config/opencode` untouched. The user's `~/.npmrc` sets `min-release-age=7`,
+  so a version published minutes ago is refused: prefix the command with
+  `npm_config_min_release_age=0` to verify a fresh release.
 - Bump `version` for every published change; the Git spec always installs the
   default branch. Keep README installation steps and `install.sh` in sync with the
   package name and repository path.
