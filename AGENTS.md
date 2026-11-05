@@ -26,9 +26,11 @@ opencode plugin add rodabarbosa/opencode-tui-model-price   # install/update the 
 ```
 
 - No build, lint, typecheck, formatter or CI is configured. Do not invent them.
-- There is no `node_modules`: `@opencode/plugin`, `@opentui/solid`, `solid-js` and
-  `@opentui/core` come from the OpenCode runtime and stay optional peers; do not
-  turn them into installed dependencies.
+- Only `@opencode/plugin` is resolved by the OpenCode runtime and stays an
+  optional peer. `@opentui/core`, `@opentui/solid` and `solid-js` are needed to
+  load `src/tui.tsx` and stay **required** peers, so the installer puts them in
+  `node_modules`. Making them optional again breaks the TUI with
+  `Cannot find package '@opentui/solid'`.
 - Manual check: edit files, then run `/reload` inside OpenCode (v2 watches plugin files).
 
 ## Distribution
@@ -48,9 +50,10 @@ Rules:
   `exports` map (`.`, `./tui`, `./rpc`) pointing at `src/*.ts(x)`, and the `files`
   allowlist (`src`, `AGENTS.md`, `install.sh`, `README.md`). Entrypoints ship as
   source; there is no build step, no `main` and no `bin`.
-- Runtime libraries (`@opencode/plugin`, `@opentui/core`, `@opentui/solid`,
-  `solid-js`) are declared **only as optional peers**: OpenCode provides them, so
-  `opencode plugin add` must not pull them into `node_modules` (install stays ~150 KB).
+- `@opencode/plugin` is an optional peer: the OpenCode runtime provides it.
+  `@opentui/core`, `@opentui/solid` and `solid-js` are required peers, because
+  `src/tui.tsx` imports them and Bun resolves them from the plugin's own
+  `node_modules`; the installer must pull them in.
 - `npm publish` ships source only; verify with `npm pack --dry-run` (10 files:
   `package.json`, docs, `install.sh`, `src/**`, no tests).
 - Verify the install in an isolated config before releasing:
