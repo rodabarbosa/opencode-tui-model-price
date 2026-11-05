@@ -8,6 +8,16 @@ A plugin for **OpenCode v2** that displays detailed token costs for **Input**, *
 
 ---
 
+## ⚡ Quick start
+
+```bash
+opencode plugin add opencode-model-pricing
+```
+
+Then run `/reload` inside OpenCode and open `/models-price`. See [Installation](#-installation) for the Git and manual alternatives and troubleshooting.
+
+---
+
 ## 🎯 Objectives
 
 1. **Cost Transparency**: View real-time token pricing (input, output, and cache) before selecting an AI model.
@@ -54,46 +64,46 @@ A plugin for **OpenCode v2** that displays detailed token costs for **Input**, *
 
 The plugin ships as an OpenCode package (`opencode-model-pricing`): there is no build step — the TypeScript entrypoints under `src/` are loaded directly.
 
-### 1. Install with the OpenCode CLI (recommended)
+### 1. npm registry (recommended)
 
 ```bash
-opencode plugin add rodabarbosa/opencode-tui-model-price
+opencode plugin add opencode-model-pricing
 ```
 
-This installs the package into the OpenCode plugin cache and registers it in your **global** configuration (`~/.config/opencode/opencode.jsonc`):
+This installs `opencode-model-pricing@1.0.0` into the OpenCode plugin cache and registers it in your **global** configuration (`~/.config/opencode/opencode.jsonc`):
 
 ```jsonc
 {
-  "plugins": ["rodabarbosa/opencode-tui-model-price"]
+  "plugins": ["opencode-model-pricing"]
 }
 ```
 
 Useful follow-ups:
 
 ```bash
-opencode plugin list                                                    # confirm the plugin is registered
-opencode plugin update rodabarbosa/opencode-tui-model-price             # pick up new commits
-opencode plugin remove rodabarbosa/opencode-tui-model-price             # uninstall
+opencode plugin list                              # confirm the plugin is registered
+opencode plugin update opencode-model-pricing     # pick up new releases
+opencode plugin remove opencode-model-pricing     # uninstall
 ```
 
 > Run `/reload` inside OpenCode after installing or removing the plugin.
+
+> **Note:** if your `~/.npmrc` sets `min-release-age` (for example `min-release-age=7`), npm and OpenCode refuse versions published less than that many days ago. Either wait for the release to age or install with `npm_config_min_release_age=0 opencode plugin add opencode-model-pricing`.
+
+### 2. Git repository
+
+Use this to track the default branch instead of npm releases; it is also immune to the `min-release-age` guard:
+
+```bash
+opencode plugin add rodabarbosa/opencode-tui-model-price
+```
 
 `./install.sh` is a thin wrapper around the same command:
 
 ```bash
 ./install.sh                                    # opencode plugin add rodabarbosa/opencode-tui-model-price
-./install.sh github:someone/fork-of-this-plugin # any npm registry or Git specifier
+./install.sh opencode-model-pricing             # any npm registry or Git specifier
 ```
-
-### 2. npm registry
-
-The package is published as `opencode-model-pricing@1.0.0`:
-
-```bash
-opencode plugin add opencode-model-pricing
-```
-
-> **Note:** if your `~/.npmrc` sets `min-release-age` (for example `min-release-age=7`), npm and OpenCode refuse versions published less than that many days ago. Either wait for the release to age or install with `npm_config_min_release_age=0 opencode plugin add opencode-model-pricing`.
 
 ### 3. Manual installation (local checkout)
 
