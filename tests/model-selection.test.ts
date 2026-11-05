@@ -5,9 +5,7 @@ import {
   errorMessage,
   isSameModel,
   matchesModelRef,
-  parseStoredModel,
   resolveActiveSessionID,
-  shouldApplyNextModel,
   toModelTarget,
 } from "../src/model-selection.ts";
 
@@ -90,34 +88,4 @@ test("errorMessage unwraps Error and string values", () => {
   assert.equal(errorMessage("plain"), "plain");
   assert.equal(errorMessage({}), "Unknown error");
   assert.equal(errorMessage(undefined), "Unknown error");
-});
-
-test("parseStoredModel accepts a valid stored reference and trims it", () => {
-  assert.deepEqual(parseStoredModel({ providerID: " kilo ", modelID: " openai/gpt " }), {
-    providerID: "kilo",
-    modelID: "openai/gpt",
-  });
-});
-
-test("parseStoredModel rejects malformed stored values", () => {
-  assert.equal(parseStoredModel(undefined), undefined);
-  assert.equal(parseStoredModel(null), undefined);
-  assert.equal(parseStoredModel("kilo/model"), undefined);
-  assert.equal(parseStoredModel({ providerID: "kilo" }), undefined);
-  assert.equal(parseStoredModel({ providerID: "  ", modelID: "m" }), undefined);
-  assert.equal(parseStoredModel({ providerID: "kilo", modelID: 42 }), undefined);
-});
-
-test("shouldApplyNextModel only targets the first prompt of a new root session", () => {
-  const pending = { providerID: "kilo", modelID: "deepseek/deepseek-v4" };
-
-  // A TUI-created session may already hold `model-switched` control messages;
-  // only real user/assistant turns count as a conversation.
-  assert.equal(shouldApplyNextModel({ pending, hasConversation: false }), true);
-  assert.equal(shouldApplyNextModel({ pending: undefined, hasConversation: false }), false);
-  assert.equal(shouldApplyNextModel({ pending, hasConversation: true }), false);
-  assert.equal(
-    shouldApplyNextModel({ pending, parentID: "ses_parent", hasConversation: false }),
-    false,
-  );
 });

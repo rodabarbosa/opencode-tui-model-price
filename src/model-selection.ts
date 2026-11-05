@@ -85,38 +85,6 @@ export function describeModelRef(ref: ModelRefLike | undefined): string {
   return `${ref.providerID}/${ref.id}`;
 }
 
-/**
- * Narrows a model reference read from plugin storage or received over RPC.
- * Returns `undefined` for anything that is not a non-empty provider + model
- * pair, so malformed values never reach `session.switchModel`.
- */
-export function parseStoredModel(value: unknown): ModelTarget | undefined {
-  if (!value || typeof value !== "object") return undefined;
-  const { providerID, modelID } = value as Record<string, unknown>;
-  if (typeof providerID !== "string" || providerID.trim().length === 0) return undefined;
-  if (typeof modelID !== "string" || modelID.trim().length === 0) return undefined;
-  return { providerID: providerID.trim(), modelID: modelID.trim() };
-}
-
-/**
- * Whether a pending "next session" preference applies to the prompt being
- * admitted: only to the first prompt of a new root session. Child sessions
- * (subagents) and sessions that already have a conversation keep their model.
- *
- * Control messages such as `model-switched` do not count as a conversation:
- * the TUI creates a session and switches its model before sending the first
- * prompt, so a brand-new session is not necessarily empty.
- */
-export function shouldApplyNextModel(input: {
-  readonly pending: ModelTarget | undefined;
-  readonly parentID?: string;
-  readonly hasConversation: boolean;
-}): boolean {
-  if (!input.pending) return false;
-  if (input.parentID) return false;
-  return !input.hasConversation;
-}
-
 /** Extracts a message from an unknown thrown value. */
 export function errorMessage(error: unknown): string {
   if (error instanceof Error && error.message) return error.message;
