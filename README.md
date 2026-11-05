@@ -1,6 +1,8 @@
 # OpenCode Model Pricing Plugin (`opencode-model-pricing`)
 
-A plugin for **OpenCode v2** that displays detailed token costs for **Input**, **Output**, and **Cache** (read/write) per million tokens during model selection, featuring once-a-day synchronization, favorite model pinning, and an interactive Split-View interface in the OpenCode CLI (TUI).
+A plugin for **OpenCode v2** that displays detailed token costs for **Input**, **Output**, and **Cache** (read/write) per million tokens during model selection, featuring once-a-day synchronization, favorite model pinning, name/input-price sorting, and an interactive Split-View interface in the OpenCode CLI (TUI).
+
+> Repository/directory: `opencode-tui-model-price` · npm package: `opencode-model-pricing`.
 
 ![Model Selection Window](src/images/model-window.png)
 
@@ -27,21 +29,22 @@ A plugin for **OpenCode v2** that displays detailed token costs for **Input**, *
   - `Cache Read` per 1M tokens
   - `Cache Write` per 1M tokens
   - `Context Window` & `Max Output` limits
-- **Sort Order Toggle**: Models within Favorites and each provider group are listed alphabetically by name by default; `Ctrl+S` (or the `[Sort: ...]` footer button) switches the ordering to lowest input price (USD per 1M tokens, ascending), with name as the tie-breaker.
+- **Sort Order Toggle**: Models within Favorites and each provider group are listed alphabetically by name by default; `Ctrl+S` (or the `[Sort: Name]` / `[Sort: Price ↑]` footer button) switches the ordering to lowest input price (USD per 1M tokens, ascending), with name as the tie-breaker.
 - **Tall Split-View**: The modal occupies 70% of the terminal height, and the visible model window is computed from the available rows, so a taller terminal shows more models instead of empty space.
 - **Instant Search / Filtering**: Dedicated search input bar at the top of the modal (`Type to Search`) supporting real-time filtering by model name, ID, or provider.
 - **Visual Provider Grouping**: Clean provider section headers without separation lines (`GitHub Copilot`, `OpenRouter`, `OpenCode`, etc.).
 - **Hybrid Synchronization**: Seamlessly combines native OpenCode cost structures with public matrices from `models.dev` (covering OpenAI, Anthropic, Google Gemini, OpenRouter, DeepSeek, Qwen, etc.).
 - **Keyboard & Mouse Support in Modal**:
+  - **Footer**: the first line shows the interaction hints plus the clickable `[Refresh]` and `[Sort: ...]` actions; the second line lists the keyboard shortcuts.
   - `Type`: Direct typing into the search bar to filter models.
   - `Mouse Wheel`: Scroll up/down through the model list using the mouse wheel.
-  - `Mouse Click`: Click to highlight, then double-click to confirm. Click `[ Favorite ]` to toggle favorite status.
+  - `Mouse Click`: Click to highlight, then double-click to confirm. Click `[ Favorite ]` to toggle favorite status, `[Refresh]` to sync prices and `[Sort: ...]` to change the ordering.
   - `↑` / `↓` or `Ctrl+P` / `Ctrl+N`: Navigate through filtered models.
   - `PageUp` / `PageDown`: Jump across batches of models.
   - `Enter`: Applies the highlighted model to the session that owns the open prompt, then closes the dialog only after OpenCode confirms the switch. With no active session the dialog is browse-only and refuses the selection with a message (the dialog stays open).
   - The model currently used by the prompt is preselected when the dialog opens (and stays highlighted until you move with the arrow keys); the preselection always follows the prompt's active model.
   - `Ctrl + F`: Toggle the highlighted model as **Favorite (★)** (pinned to the top group).
-  - `Ctrl + S` or the `[Sort: ...]` footer button: Toggle the list ordering between **Name** (default) and **lowest input price** (ascending, tie-broken by name).
+  - `Ctrl + S` or the `[Sort: Name]` / `[Sort: Price ↑]` footer button: Toggle the list ordering between **Name** (default) and **lowest input price** (ascending, tie-broken by name).
   - `Ctrl + R`: Force real-time price synchronization directly from within the modal.
   - `Esc`: Clear search filter, or close the dialog if the search query is empty.
 
@@ -49,9 +52,20 @@ A plugin for **OpenCode v2** that displays detailed token costs for **Input**, *
 
 ## 📦 Installation
 
+### Quick install (recommended)
+
+From the cloned repository:
+
+```bash
+./install.sh
+# same as: opencode plugin add rodabarbosa/opencode-tui-model-price
+```
+
+The script wraps `opencode plugin add` and registers the plugin straight from the Git repository.
+
 ### 1. Place the plugin directory
 
-Ensure the `opencode-model-pricing` folder is located in your OpenCode plugins directory (default is `~/.config/opencode/plugins/`):
+Ensure the `opencode-tui-model-price` folder is located in your OpenCode plugins directory (default is `~/.config/opencode/plugins/`):
 
 ```bash
 # Windows (PowerShell)
@@ -68,7 +82,7 @@ Open your global `opencode.jsonc` file (`~/.config/opencode/opencode.jsonc`) and
 {
   "$schema": "https://opencode.ai/config.json",
   "plugins": [
-    "./plugins/opencode-model-pricing"
+    "./plugins/opencode-tui-model-price"
   ]
 }
 ```
@@ -103,7 +117,7 @@ Selecting a model is a real switch, not just a UI highlight:
 **Selection requires an active session.** The active session is captured from
 the prompt route when the dialog opens. Without one, pricing is browse-only:
 navigation, search, favorites and price details stay available, but
-`Enter` / `Select Model` is refused with a message and the dialog stays open.
+`Enter` (or a double-click) is refused with a message and the dialog stays open.
 
 Changing the model inside a session resets the variant to the model default;
 selecting the current model keeps it. Aliased models are switched by their
@@ -114,7 +128,9 @@ catalog ID (`id`), not by the provider-facing `modelID`.
 ## 📁 Project Structure
 
 ```text
-opencode-model-pricing/
+opencode-tui-model-price/
+├── AGENTS.md           # Plugin conventions and invariants for AI agents
+├── install.sh          # Installs the plugin through the OpenCode CLI
 ├── package.json        # Plugin manifest (exports for server, tui, and rpc)
 ├── tsconfig.json       # TypeScript and JSX configuration for OpenTUI/SolidJS
 ├── README.md           # Documentation and usage guide
@@ -125,10 +141,10 @@ opencode-model-pricing/
     ├── images/         # UI preview screenshots and assets
     │   └── model-window.png
     ├── rpc.ts          # RPC contract with Standard Schema for inter-process communication
-    ├── pricing.ts      # Data fetching, normalization, and USD formatting
+    ├── pricing.ts      # Price fetching/normalization, USD formatting, price lookup and sorting
     ├── model-selection.ts  # Pure helpers: active-session resolution and model identifiers
     ├── index.ts        # OpenCode server daemon: daily sync, storage, RPC
-    └── tui.tsx         # TUI (CLI) interface: xlarge split-view modal and keymaps
+    └── tui.tsx         # TUI (CLI) split-view modal: 70% height, sort toggle, favorites, keymaps
 ```
 
 ## 🧪 Development
@@ -137,8 +153,11 @@ opencode-model-pricing/
 npm test          # node --test tests/
 ```
 
-The helper module (`src/model-selection.ts`) is intentionally free of
-OpenTUI/Solid imports so it can be tested without the TUI runtime.
+The helper modules (`src/model-selection.ts` and `src/pricing.ts`) are
+intentionally free of OpenTUI/Solid imports so they can be tested without the
+TUI runtime. `AGENTS.md` documents the layout and behavior invariants the plugin
+must keep (single `/models-price` command, 70% dialog height, footer layout,
+sort default, pricing cache keys).
 
 ---
 
