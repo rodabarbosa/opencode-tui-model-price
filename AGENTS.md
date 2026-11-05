@@ -48,9 +48,11 @@ Rules:
   `exports` map (`.`, `./tui`, `./rpc`) pointing at `src/*.ts(x)`, and the `files`
   allowlist (`src`, `AGENTS.md`, `install.sh`, `README.md`). Entrypoints ship as
   source; there is no build step, no `main` and no `bin`.
-- Runtime libraries (`@opencode/plugin`, `@opentui/core`, `@opentui/solid`,
-  `solid-js`) are declared **only as optional peers**: OpenCode provides them, so
-  `opencode plugin add` must not pull them into `node_modules` (install stays ~150 KB).
+- Runtime libraries: `@opencode/plugin` is an **optional** peer (OpenCode provides
+  it), while `@opentui/core`, `@opentui/solid` and `solid-js` are **regular
+  (installed) peers**. OpenCode resolves `@opentui/solid` for local plugins but not
+  for packages loaded from `~/.cache/opencode/npm`, so npm must install those three
+  next to the plugin (install is ~85 MB; do not mark them optional again — issue #1).
 - `npm publish` ships source only; verify with `npm pack --dry-run` (10 files:
   `package.json`, docs, `install.sh`, `src/**`, no tests).
 - Verify the install in an isolated config before releasing:

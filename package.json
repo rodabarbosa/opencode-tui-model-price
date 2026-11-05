@@ -1,6 +1,6 @@
 {
   "name": "opencode-model-pricing",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "OpenCode plugin to display model input, output, and cache pricing with daily sync and interactive split-view selector",
   "type": "module",
   "scripts": {
@@ -43,15 +43,6 @@
   },
   "peerDependenciesMeta": {
     "@opencode/plugin": {
-      "optional": true
-    },
-    "@opentui/core": {
-      "optional": true
-    },
-    "@opentui/solid": {
-      "optional": true
-    },
-    "solid-js": {
       "optional": true
     }
   }
