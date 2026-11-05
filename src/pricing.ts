@@ -126,9 +126,71 @@ export function buildPricingMatrixFromOpenCode(
 }
 
 export function formatUSD(amount: number | undefined): string {
-  if (amount === undefined || isNaN(amount)) return "N/D";
+  if (amount === undefined || isNaN(amount)) return "N/A";
   if (amount === 0) return "$0.00";
   if (amount < 0.01) return `$${amount.toFixed(4)}`;
   if (amount < 0.1) return `$${amount.toFixed(3)}`;
   return `$${amount.toFixed(2)}`;
+}
+
+/** Ordering offered by the pricing dialog: by model name or by input price. */
+export type ModelSortMode = "name" | "input";
+
+/**
+ * Resolves the price detail for a catalog model: the matrix is looked up by
+ * full id, then by the provider-facing short id, then by the raw id, falling
+ * back to the model's own native `cost` tier.
+ */
+export function lookupModelPrice(
+  model: { id?: string; modelID?: string; cost?: any[]; limit?: any } | undefined,
+  matrix: PricingMatrix = {},
+): ModelPriceDetail {
+  const fullId = (model?.id || "").toLowerCase();
+  const shortId = (model?.modelID || fullId.split("/")[1] || fullId).toLowerCase();
+
+  const found =
+    matrix[fullId] || matrix[shortId] || (model?.id ? matrix[model.id] : undefined);
+  if (found) return found;
+
+  return {
+    inputPerMillion: model?.cost?.[0]?.input ?? 0,
+    outputPerMillion: model?.cost?.[0]?.output ?? 0,
+    cacheReadPerMillion: model?.cost?.[0]?.cache?.read ?? 0,
+    cacheWritePerMillion: model?.cost?.[0]?.cache?.write ?? 0,
+    contextLimit: model?.limit?.context,
+    outputLimit: model?.limit?.output,
+  };
+}
+
+const modelLabel = (model: any): string =>
+  String(model?.name || model?.id || "").toLowerCase();
+
+/** Alphabetical comparator (case-insensitive). */
+export function compareModelsByName(a: any, b: any): number {
+  return modelLabel(a).localeCompare(modelLabel(b));
+}
+
+/** Ascending input-price comparator, falling back to name on ties. */
+export function compareModelsByInputPrice(
+  a: any,
+  b: any,
+  matrix: PricingMatrix = {},
+): number {
+  const diff =
+    lookupModelPrice(a, matrix).inputPerMillion -
+    lookupModelPrice(b, matrix).inputPerMillion;
+  return diff !== 0 ? diff : compareModelsByName(a, b);
+}
+
+/** Returns a sorted copy of the models for the given mode. */
+export function sortModels(
+  models: any[],
+  mode: ModelSortMode,
+  matrix: PricingMatrix = {},
+): any[] {
+  const compare =
+    mode === "input"
+      ? (a: any, b: any) => compareModelsByInputPrice(a, b, matrix)
+      : compareModelsByName;
+  return [...models].sort(compare);
 }

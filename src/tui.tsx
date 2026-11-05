@@ -1,13 +1,17 @@
 /** @jsxImportSource @opentui/solid */
 import { Plugin } from "@opencode/plugin/tui";
 import { createEffect, createMemo, createSignal, For, onMount, Show } from "solid-js";
-import { formatUSD } from "./pricing.js";
+import {
+  formatUSD,
+  lookupModelPrice,
+  sortModels,
+  type ModelSortMode,
+} from "./pricing.js";
 import {
   describeModelRef,
   errorMessage,
   isSameModel,
   matchesModelRef,
-  parseStoredModel,
   resolveActiveSessionID,
   toModelTarget,
   type ModelRefLike,
@@ -40,12 +44,6 @@ function formatProviderTitle(provider: string): string {
   if (p === "google") return "GOOGLE GEMINI";
   return provider.toUpperCase();
 }
-
-const sortByName = (a: any, b: any) => {
-  const nameA = (a.name || a.id).toLowerCase();
-  const nameB = (b.name || b.id).toLowerCase();
-  return nameA.localeCompare(nameB);
-};
 
 export default Plugin.define({
   id: "model-pricing-tui",
@@ -118,68 +116,28 @@ export default Plugin.define({
       );
     }
 
-    // Override built-in model.list command with pricing & favorites support
+    // The built-in `/models` (model.list) is deliberately NOT overridden so
+    // OpenCode keeps its native behavior; this plugin exposes a dedicated
+    // `/models-price` command that opens the pricing dialog.
     context.keymap.layer(() => ({
       mode: "global",
       priority: 100,
       commands: [
         {
-          id: "model.list",
+          id: "model.pricing.dialog",
           title: "Models: Select with pricing details",
           group: "Models",
-          slash: { name: "models" },
+          slash: { name: "models-price" },
           palette: true,
           suggested: true,
           run: () => {
             openPricingModelDialog();
           },
         },
-        {
-          id: "model.pricing.refresh",
-          title: "Models: Force refresh token prices",
-          group: "Models",
-          slash: { name: "update-model-prices" },
-          palette: true,
-          run: async () => {
-            try {
-              context.ui.toast.show({
-                title: "Pricing",
-                message: "Updating pricing table...",
-                variant: "info",
-              });
-              const res = await pricingRpc.forceRefresh();
-              context.ui.toast.show({
-                title: "Prices Updated",
-                message: `${res.count} models successfully synchronized.`,
-                variant: "success",
-              });
-            } catch (err: any) {
-              context.ui.toast.show({
-                title: "Update Error",
-                message: err?.message || "Failed to synchronize prices.",
-                variant: "error",
-              });
-            }
-          },
-        },
       ],
     }));
 
     async function openPricingModelDialog() {
-      // Model chosen while no session exists. The server plugin applies it to the
-      // first prompt of the next new session (prompt hook + `session.switchModel`),
-      // because OpenCode's composer only accepts a model change for a session.
-      //
-      // Resolve the stored preference before opening so the banner and the
-      // highlighted row are consistent on first paint.
-      let pendingModel: ModelTarget | null = null;
-      try {
-        const res: any = await pricingRpc.getNextModel();
-        pendingModel = parseStoredModel(res?.model) ?? null;
-      } catch {
-        // No server-side preference (or RPC unavailable): nothing to preload.
-      }
-
       // Load initial local models synchronously for instant 0ms dialog display
       const localModels = context.data.location.model.list() ?? [];
       const location = context.location ?? context.data.location.default();
@@ -187,6 +145,21 @@ export default Plugin.define({
       // to the first item of `session.list()` (that is the most recently
       // updated session, not the one being displayed).
       const sessionID = resolveActiveSessionID(context.ui.router.current());
+
+      // `dialog.set` only sizes the width (presets map to fixed columns) and
+      // centers the dialog; a taller window has to come from the content box.
+      // Target 70% of the terminal rows so the list gets the extra space.
+      const terminalRows = (() => {
+        try {
+          const height = (context.renderer as any)?.height;
+          return typeof height === "number" && height > 0 ? height : undefined;
+        } catch {
+          return undefined;
+        }
+      })();
+      const dialogRows = terminalRows
+        ? Math.max(20, Math.floor(terminalRows * 0.7))
+        : undefined;
 
       context.ui.dialog.set({ size: "xlarge", centered: true });
 
@@ -197,6 +170,7 @@ export default Plugin.define({
         const [selectedIndex, setSelectedIndex] = createSignal(0);
         const [searchQuery, setSearchQuery] = createSignal("");
         const [prices, setPrices] = createSignal<PricingMatrix>({});
+        const [sortMode, setSortMode] = createSignal<ModelSortMode>("name");
         const [isRefreshing, setIsRefreshing] = createSignal(false);
         const [isApplying, setIsApplying] = createSignal(false);
         const [selectionError, setSelectionError] = createSignal<string | null>(null);
@@ -258,9 +232,12 @@ export default Plugin.define({
           });
         });
 
-        // Group models: 1st Favorites (if any), 2nd by Provider, sorted alphabetically by name
+        // Group models: 1st Favorites (if any), 2nd by Provider, ordered by the
+        // active sort mode (name by default, or ascending input price).
         const visualData = createMemo(() => {
           const list = filteredModelsList();
+          const mode = sortMode();
+          const matrix = prices();
           const favs: any[] = [];
           const byProvider: Record<string, any[]> = {};
 
@@ -274,22 +251,22 @@ export default Plugin.define({
             }
           }
 
-          favs.sort(sortByName);
+          const sortedFavs = sortModels(favs, mode, matrix);
 
           const entries: VisualItem[] = [];
           const selectable: any[] = [];
           let globalIdx = 0;
 
           // 1. Favorites group (only if there are favorited models)
-          if (favs.length > 0) {
+          if (sortedFavs.length > 0) {
             entries.push({
               type: "header",
               id: "hdr_favorites",
               title: "★ FAVORITES",
-              count: favs.length,
+              count: sortedFavs.length,
               isFav: true,
             });
-            for (const m of favs) {
+            for (const m of sortedFavs) {
               entries.push({
                 type: "model",
                 id: `fav_${m.id}`,
@@ -322,10 +299,10 @@ export default Plugin.define({
           });
 
           for (const provider of sortedProviders) {
-            const pModels = byProvider[provider];
-            if (!pModels || pModels.length === 0) continue;
+            const group = byProvider[provider];
+            if (!group || group.length === 0) continue;
 
-            pModels.sort(sortByName);
+            const pModels = sortModels(group, mode, matrix);
 
             entries.push({
               type: "header",
@@ -359,11 +336,7 @@ export default Plugin.define({
         };
 
         const activeModelIndex = () => {
-          // With no session, highlight the model that the next new session will
-          // actually use: the stored preference wins over the composer model.
-          const current = sessionID
-            ? context.ui.model.current()
-            : pendingModel ?? context.ui.model.current();
+          const current = context.ui.model.current();
           if (!current) return -1;
           return visualData().selectable.findIndex(
             (m: any) =>
@@ -397,26 +370,7 @@ export default Plugin.define({
               cacheWritePerMillion: 0,
             };
           }
-          const dict = prices();
-          const fullId = (m.id || "").toLowerCase();
-          const shortId = (
-            m.modelID ||
-            fullId.split("/")[1] ||
-            fullId
-          ).toLowerCase();
-
-          return (
-            dict[fullId] ||
-            dict[shortId] ||
-            dict[m.id] || {
-              inputPerMillion: m.cost?.[0]?.input ?? 0,
-              outputPerMillion: m.cost?.[0]?.output ?? 0,
-              cacheReadPerMillion: m.cost?.[0]?.cache?.read ?? 0,
-              cacheWritePerMillion: m.cost?.[0]?.cache?.write ?? 0,
-              contextLimit: m.limit?.context,
-              outputLimit: m.limit?.output,
-            }
-          );
+          return lookupModelPrice(m, prices());
         });
 
         const selectedVisualIdx = createMemo(() => {
@@ -428,18 +382,48 @@ export default Plugin.define({
           return found >= 0 ? found : 0;
         });
 
-        const VISIBLE_COUNT = 13;
+        /**
+         * Rows used by the header, search bar, inter-block gaps and the two-line
+         * footer. Optional blocks (no-session banner, error box) shrink the list
+         * so a 70%-height dialog keeps every row inside the window.
+         */
+        const CHROME_ROWS = 13;
+        const listRows = createMemo(() => {
+          if (!dialogRows) return 16;
+          const extra = (sessionID ? 0 : 2) + (selectionError() ? 3 : 0);
+          return Math.max(3, dialogRows - CHROME_ROWS - extra);
+        });
+
+        const entryRows = (entry: VisualItem) => (entry.type === "header" ? 2 : 1);
+
         const visibleRange = createMemo(() => {
           const list = visualData().entries;
-          const target = selectedVisualIdx();
-          let start = Math.max(0, target - Math.floor(VISIBLE_COUNT / 2));
-          if (start + VISIBLE_COUNT > list.length) {
-            start = Math.max(0, list.length - VISIBLE_COUNT);
+          if (list.length === 0) return { start: 0, end: 0 };
+
+          const target = Math.min(selectedVisualIdx(), list.length - 1);
+          const budget = listRows();
+
+          let start = Math.max(0, target - Math.floor(budget / 2));
+          let used = 0;
+          let end = start;
+          while (end < list.length && used + entryRows(list[end]) <= budget) {
+            used += entryRows(list[end]);
+            end++;
           }
-          return {
-            start,
-            end: Math.min(list.length, start + VISIBLE_COUNT),
-          };
+
+          // The first window can end before the selected row (small budgets):
+          // rebuild it anchored on the selection so the cursor stays visible.
+          if (target >= end) {
+            start = target;
+            end = target + 1;
+            used = entryRows(list[target]);
+            while (start > 0 && used + entryRows(list[start - 1]) <= budget) {
+              start--;
+              used += entryRows(list[start]);
+            }
+          }
+
+          return { start, end };
         });
 
         const visibleEntries = createMemo(() => {
@@ -465,60 +449,18 @@ export default Plugin.define({
           close();
         };
 
-        /**
-         * Flow A — no session: persist the choice on the server. The prompt hook
-         * applies it to the first prompt of the next new session, so selection
-         * no longer depends on a session existing.
-         *
-         * Picking the model OpenCode already shows clears the stored preference,
-         * which is the way to cancel a previously chosen next-session model.
-         */
-        const selectModelWithoutSession = async (
-          target: ModelTarget,
-          name: string,
-        ) => {
-          const pending = pendingModel;
-          const active = context.ui.model.current();
-
-          if (pending && isSameModel(pending, target)) {
-            context.ui.toast.show({
-              title: "Model already defined",
-              message: `${name} (${target.providerID}) is already the model for the next session.`,
-              variant: "info",
-            });
-            return;
-          }
-
-          if (pending && isSameModel(active, target)) {
-            await pricingRpc.clearNextModel();
-            context.ui.toast.show({
-              title: "Next-session model cleared",
-              message: `The next prompt will use the current model: ${name} (${target.providerID}).`,
-              variant: "info",
-            });
-            return;
-          }
-
-          if (!pending && isSameModel(active, target)) {
-            context.ui.toast.show({
-              title: "Model already selected",
-              message: `${name} (${target.providerID}) is already selected.`,
-              variant: "info",
-            });
-            return;
-          }
-
-          const result: any = await pricingRpc.setNextModel(target);
-          const applied: ModelTarget = result?.model ?? target;
-          context.ui.toast.show({
-            title: "Model Set for Next Session",
-            message: `${name} (${applied.providerID}) will be used by the first prompt of the next session.`,
-            variant: "success",
-          });
-        };
-
         const selectCurrentModel = async () => {
           if (isApplying()) return;
+
+          // Selection is refused without an active session: the dialog is
+          // browse-only there because there is nothing to apply the choice to.
+          if (!sessionID) {
+            handleSelectionError(
+              "No active session: start a session before selecting a model.",
+              "Selection unavailable",
+            );
+            return;
+          }
 
           const m = currentModel();
           if (!m) return;
@@ -535,27 +477,20 @@ export default Plugin.define({
 
           setIsApplying(true);
           try {
-            if (sessionID) {
-              const result = await applySelectedModel(sessionID, target);
-              context.ui.toast.show({
-                title:
-                  result === "applied"
-                    ? "Active Model Switched"
-                    : "Model already active",
-                message: `${m.name || target.modelID} (${target.providerID})`,
-                variant: result === "applied" ? "success" : "info",
-              });
-            } else {
-              await selectModelWithoutSession(target, m.name || target.modelID);
-            }
+            const result = await applySelectedModel(sessionID, target);
+            context.ui.toast.show({
+              title:
+                result === "applied"
+                  ? "Active Model Switched"
+                  : "Model already active",
+              message: `${m.name || target.modelID} (${target.providerID})`,
+              variant: result === "applied" ? "success" : "info",
+            });
             setIsApplying(false);
             close();
           } catch (error) {
             setIsApplying(false);
-            handleSelectionError(
-              errorMessage(error),
-              sessionID ? "Error switching model" : "Error selecting model",
-            );
+            handleSelectionError(errorMessage(error), "Error switching model");
           }
         };
 
@@ -583,6 +518,19 @@ export default Plugin.define({
               });
             }
           });
+        };
+
+        const toggleSortMode = () => {
+          const model = currentModel();
+          const next: ModelSortMode = sortMode() === "name" ? "input" : "name";
+
+          followsActiveModel = false;
+          setSortMode(next);
+
+          // Reordering moves the highlighted model: follow it to its new
+          // position instead of leaving the cursor on a different row.
+          const nextIndex = model ? visualData().selectable.indexOf(model) : -1;
+          setSelection(nextIndex >= 0 ? nextIndex : 0);
         };
 
         const handleForceRefresh = async () => {
@@ -673,6 +621,12 @@ export default Plugin.define({
               run: toggleFavorite,
             },
             {
+              bind: "ctrl+s",
+              title: "Toggle Sort (Name / Input Price)",
+              group: "Action",
+              run: toggleSortMode,
+            },
+            {
               bind: "ctrl+r",
               title: "Force Refresh",
               group: "Action",
@@ -696,6 +650,7 @@ export default Plugin.define({
         return (
           <box
             flexDirection="column"
+            height={dialogRows}
             paddingLeft={1}
             paddingRight={1}
             gap={1}
@@ -776,31 +731,18 @@ export default Plugin.define({
               </Show>
             </box>
 
-            {/* No-session guidance: the choice applies to the next new session */}
+            {/* No-session banner: pricing is browse-only without a session */}
             <Show when={!sessionID}>
               <box paddingLeft={1}>
-                <Show
-                  when={pendingModel}
-                  fallback={
-                    <text fg={theme().text?.muted || "gray"} wrap="word">
-                      No session yet: the model you pick is applied to the first
-                      prompt of the next new session.
-                    </text>
-                  }
-                >
-                  {(pending) => (
-                    <text fg={theme().text?.muted || "gray"} wrap="word">
-                      Next session: {pending().providerID}/
-                      {pending().modelID} — applied to the first prompt of the
-                      next new session.
-                    </text>
-                  )}
-                </Show>
+                <text fg={theme().text?.muted || "gray"} wrap="word">
+                  No session active: pricing is browse-only — start a session
+                  to select a model.
+                </text>
               </box>
             </Show>
 
             {/* Split Screen Body: Left (Grouped List) | Right (Details Card) */}
-            <box flexDirection="row" gap={2}>
+            <box flexDirection="row" flexGrow={1} minHeight={0} gap={2}>
               {/* Column 1: Model List with Mouse Scroll & Click Selection */}
               <box
                 width="58%"
@@ -1057,25 +999,6 @@ export default Plugin.define({
                             Source: {p().source || "models.dev"}
                           </text>
                         </box>
-
-                        {/* Clickable Select Button */}
-                        <box
-                          marginTop={1}
-                          paddingLeft={2}
-                          paddingRight={2}
-                          border={true}
-                          onMouseDown={selectCurrentModel}
-                          onMouseUp={selectCurrentModel}
-                          alignSelf="flex-start"
-                        >
-                          <text bold fg={theme().text?.selected || "cyan"}>
-                            {isApplying()
-                              ? "Applying..."
-                              : sessionID
-                                ? "▶ Select Model [Enter]"
-                                : "▶ Set for Next Session [Enter]"}
-                          </text>
-                        </box>
                       </box>
                     );
                   }}
@@ -1092,36 +1015,66 @@ export default Plugin.define({
               </box>
             </Show>
 
-            {/* Footer with keymap shortcuts & clickable actions */}
+            {/* Footer with keymap shortcuts & clickable actions (two lines) */}
             <box
               borderTop={true}
               paddingTop={1}
-              flexDirection="row"
-              justifyContent="space-between"
+              flexDirection="column"
             >
-              <text fg={theme().text?.muted || "gray"}>
-                Type to Search | ↑/↓ Scroll | Click/Enter Select | Ctrl+F
-                Favorite | Ctrl+R Refresh
-              </text>
-              <box flexDirection="row" gap={1}>
-                <Show when={isApplying()}>
-                  <text bold fg="yellow">
-                    Switching model...
-                  </text>
-                </Show>
-                <Show when={isRefreshing()}>
-                  <text bold fg="yellow">
-                    Refreshing...
-                  </text>
-                </Show>
-                <box
-                  onMouseDown={handleForceRefresh}
-                  onMouseUp={handleForceRefresh}
-                  paddingLeft={1}
+              {/* Line 1: interaction hints and clickable actions */}
+              <box flexDirection="row" alignItems="center" gap={1}>
+                <text
+                  flexGrow={1}
+                  flexShrink={1}
+                  minWidth={0}
+                  truncate={true}
+                  fg={theme().text?.muted || "gray"}
+                  wrap="never"
                 >
-                  <text fg={theme().text?.muted || "gray"}>[Refresh]</text>
+                  Type to Search | Scroll | Click/Enter Select
+                </text>
+                <box flexDirection="row" flexShrink={0} gap={1}>
+                  <Show when={isApplying()}>
+                    <text bold flexShrink={0} fg="yellow" wrap="never">
+                      Switching model...
+                    </text>
+                  </Show>
+                  <Show when={isRefreshing()}>
+                    <text bold flexShrink={0} fg="yellow" wrap="never">
+                      Refreshing...
+                    </text>
+                  </Show>
+                  <box
+                    flexShrink={0}
+                    onMouseDown={handleForceRefresh}
+                    onMouseUp={handleForceRefresh}
+                  >
+                    <text fg={theme().text?.muted || "gray"} wrap="never">
+                      [Refresh]
+                    </text>
+                  </box>
+                  <box
+                    flexShrink={0}
+                    onMouseDown={toggleSortMode}
+                    onMouseUp={toggleSortMode}
+                  >
+                    <text
+                      bold
+                      fg={theme().text?.selected || "cyan"}
+                      wrap="never"
+                    >
+                      {sortMode() === "name"
+                        ? "[Sort: Name]"
+                        : "[Sort: Price ↑]"}
+                    </text>
+                  </box>
                 </box>
               </box>
+
+              {/* Line 2: keyboard shortcuts */}
+              <text fg={theme().text?.muted || "gray"} wrap="never">
+                Ctrl+F Favorite | Ctrl+R Refresh | Ctrl+S Sort
+              </text>
             </box>
           </box>
         );
