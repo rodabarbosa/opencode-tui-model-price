@@ -175,9 +175,15 @@ catalog ID (`id`), not by the provider-facing `modelID`.
 opencode-tui-model-price/
 ├── AGENTS.md           # Plugin conventions and invariants for AI agents
 ├── install.sh          # Installs the plugin through the OpenCode CLI
-├── package.json        # Plugin manifest (exports for server, tui, and rpc)
+├── package.json        # Plugin manifest (exports dist/*.js for server, tui and rpc)
 ├── tsconfig.json       # TypeScript and JSX configuration for OpenTUI/SolidJS
 ├── README.md           # Documentation and usage guide
+├── scripts/
+│   └── bundle.ts       # Builds src/* into dist/ with the OpenTUI Solid transform
+├── dist/               # Committed build output published to npm/Git installs
+│   ├── index.js
+│   ├── rpc.js
+│   └── tui.js
 ├── tests/
 │   ├── model-selection.test.ts            # Unit tests for session/model helpers
 │   └── pricing-sort.test.ts               # Unit tests for price lookup and list ordering
@@ -195,7 +201,14 @@ opencode-tui-model-price/
 
 ```bash
 npm test          # node --test tests/
+bun run bundle    # compile src/* into dist/ before publishing (prepublishOnly runs it)
 ```
+
+The published entrypoints are the compiled files in `dist/`: OpenCode does not
+transform `.tsx` for packages loaded from its npm cache, and shipping raw sources
+made the dialog load a second Solid instance (it opened but ignored input). Commit
+`dist/` after every source change; `bun install` is only needed for the build
+tooling.
 
 The helper modules (`src/model-selection.ts` and `src/pricing.ts`) are
 intentionally free of OpenTUI/Solid imports so they can be tested without the

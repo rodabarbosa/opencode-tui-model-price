@@ -1,37 +1,45 @@
 # AGENTS.md
 
 OpenCode v2 plugin that shows model token prices in a split-view TUI dialog.
-OpenCode loads the TypeScript sources directly — there is no build step.
+Sources live in `src/`; `bun run bundle` compiles them into the committed
+`dist/`, which is what `package.json` `exports` publishes.
 
 ## Entrypoints (`package.json` `exports`)
 
-| Export | File | Role |
-| ------ | ---- | ---- |
-| `.` | `src/index.ts` | Server plugin: daily sync, `ctx.storage` cache, RPC, injects `model.cost` |
-| `./tui` | `src/tui.tsx` | OpenTUI/Solid `/models-price` dialog (CLI TUI) |
-| `./rpc` | `src/rpc.ts` | Shared RPC contract and `PricingMatrix` types |
+| Export | Source | Published file | Role |
+| ------ | ------ | -------------- | ---- |
+| `.` | `src/index.ts` | `dist/index.js` | Server plugin: daily sync, `ctx.storage` cache, RPC, injects `model.cost` |
+| `./tui` | `src/tui.tsx` | `dist/tui.js` | OpenTUI/Solid `/models-price` dialog (CLI TUI) |
+| `./rpc` | `src/rpc.ts` | `dist/rpc.js` | Shared RPC contract and `PricingMatrix` types |
+
+The TUI must ship as JS: OpenCode loads packages from `~/.cache/opencode/npm`
+without transforming `.tsx`, so raw sources resolve `@opentui/solid`/`solid-js`
+from the plugin's own `node_modules`, creating a second Solid instance and a
+render loop (dialog opens but stops responding).
 
 Pure support modules: `src/pricing.ts` (fetch/normalize/format, price lookup and
 model sorting) and `src/model-selection.ts` (session/model helpers). Adding an
-entrypoint requires updating `package.json` `exports` — OpenCode discovers the
-plugin through it.
+entrypoint requires updating `package.json` `exports` and `scripts/bundle.ts` —
+OpenCode discovers the plugin through them.
 
 ## Commands
 
 ```bash
 npm test        # node --test tests/ — the only automated check
+bun run bundle  # compiles src/* into dist/ (prepublishOnly runs it)
 node --test --test-name-pattern="toModelTarget" tests/model-selection.test.ts
 opencode plugin add rodabarbosa/opencode-tui-model-price   # install/update the package
 ./install.sh    # wrapper for the same command
 ```
 
-- No build, lint, typecheck, formatter or CI is configured. Do not invent them.
-- Only `@opencode/plugin` is resolved by the OpenCode runtime and stays an
-  optional peer. `@opentui/core`, `@opentui/solid` and `solid-js` are needed to
-  load `src/tui.tsx` and stay **required** peers, so the installer puts them in
-  `node_modules`. Making them optional again breaks the TUI with
-  `Cannot find package '@opentui/solid'`.
-- Manual check: edit files, then run `/reload` inside OpenCode (v2 watches plugin files).
+- No lint, typecheck, formatter or CI is configured. Do not invent them.
+- `dist/` is generated but committed; never edit it by hand.
+- Do **not** name an npm script `build`: npm/pacote runs it while preparing a Git
+  dependency, which breaks `opencode plugin add <git-spec>`. Use `bundle`.
+- `bun install` creates `node_modules/` (git-ignored) only for the build tooling
+  (`@opentui/solid`); it is not shipped and not a runtime dependency.
+- Manual check: edit `src/`, run `bun run bundle`, then `/reload` inside OpenCode
+  (v2 watches plugin files).
 
 ## Distribution
 
@@ -47,26 +55,30 @@ opencode plugin add opencode-model-pricing                # npm (after `npm publ
 Rules:
 
 - `package.json` keeps `name: opencode-model-pricing`, `type: module`, the
-  `exports` map (`.`, `./tui`, `./rpc`) pointing at `src/*.ts(x)`, and the `files`
-  allowlist (`src`, `AGENTS.md`, `install.sh`, `README.md`). Entrypoints ship as
-  source; there is no build step, no `main` and no `bin`.
+  `exports` map (`.`, `./tui`, `./rpc`) pointing at `dist/*.js`, and the `files`
+  allowlist (`dist`, `AGENTS.md`, `install.sh`, `README.md`). There is no `main`
+  and no `bin`.
+- `dist/` is built with `bun run bundle` and committed, so Git installs work
+  without a toolchain on the consumer side. `prepublishOnly` rebuilds it.
 - `@opencode/plugin` is an optional peer: the OpenCode runtime provides it.
-  `@opentui/core`, `@opentui/solid` and `solid-js` are required peers, because
-  `src/tui.tsx` imports them and Bun resolves them from the plugin's own
-  `node_modules`; the installer must pull them in.
-- `npm publish` ships source only; verify with `npm pack --dry-run` (10 files:
-  `package.json`, docs, `install.sh`, `src/**`, no tests).
+  `@opentui/core`, `@opentui/solid` and `solid-js` are required peers as a
+  fallback: `dist/tui.js` imports them as bare specifiers, which the host usually
+  maps to its own instances; the installed copies cover hosts that do not.
+- `npm publish` ships the compiled entrypoints; verify with `npm pack --dry-run`
+  (7 files: `package.json`, docs, `install.sh`, `dist/*.js`, no tests/src).
 - Verify the install in an isolated config before releasing:
 
   ```bash
   XDG_CONFIG_HOME=/tmp/opencode/inst/config XDG_CACHE_HOME=/tmp/opencode/inst/cache \
-    opencode plugin add rodabarbosa/opencode-tui-model-price
+    npm_config_min_release_age=0 opencode plugin add rodabarbosa/opencode-tui-model-price
   ```
 
   It must print `Plugin "..." installed and added to <config>` and leave the real
-  `~/.config/opencode` untouched. The user's `~/.npmrc` sets `min-release-age=7`,
-  so a version published minutes ago is refused: prefix the command with
-  `npm_config_min_release_age=0` to verify a fresh release.
+  `~/.config/opencode` untouched. Then start `opencode --standalone` in the same
+  env, run `/models-price` and confirm the dialog accepts typing (a render loop
+  shows the dialog but ignores input). The user's `~/.npmrc` sets
+  `min-release-age=7`, so a version published minutes ago is refused without
+  `npm_config_min_release_age=0`.
 - Bump `version` for every published change; the Git spec always installs the
   default branch. Keep README installation steps and `install.sh` in sync with the
   package name and repository path.
