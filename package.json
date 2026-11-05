@@ -11,6 +11,12 @@
     "./tui": "./src/tui.tsx",
     "./rpc": "./src/rpc.ts"
   },
+  "files": [
+    "src",
+    "AGENTS.md",
+    "install.sh",
+    "README.md"
+  ],
   "keywords": [
     "opencode",
     "plugin",
@@ -19,6 +25,34 @@
     "cost",
     "tokens"
   ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/rodabarbosa/opencode-tui-model-price.git"
+  },
+  "bugs": {
+    "url": "https://github.com/rodabarbosa/opencode-tui-model-price/issues"
+  },
+  "homepage": "https://github.com/rodabarbosa/opencode-tui-model-price#readme",
   "author": "",
-  "license": "MIT"
+  "license": "MIT",
+  "peerDependencies": {
+    "@opencode/plugin": ">=2.0.0",
+    "@opentui/core": ">=0.6.6",
+    "@opentui/solid": ">=0.6.6",
+    "solid-js": ">=1.9.0"
+  },
+  "peerDependenciesMeta": {
+    "@opencode/plugin": {
+      "optional": true
+    },
+    "@opentui/core": {
+      "optional": true
+    },
+    "@opentui/solid": {
+      "optional": true
+    },
+    "solid-js": {
+      "optional": true
+    }
+  }
 }

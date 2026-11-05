@@ -52,20 +52,52 @@ A plugin for **OpenCode v2** that displays detailed token costs for **Input**, *
 
 ## 📦 Installation
 
-### Quick install (recommended)
+The plugin ships as an OpenCode package (`opencode-model-pricing`): there is no build step — the TypeScript entrypoints under `src/` are loaded directly.
 
-From the cloned repository:
+### 1. Install with the OpenCode CLI (recommended)
 
 ```bash
-./install.sh
-# same as: opencode plugin add rodabarbosa/opencode-tui-model-price
+opencode plugin add rodabarbosa/opencode-tui-model-price
 ```
 
-The script wraps `opencode plugin add` and registers the plugin straight from the Git repository.
+This installs the package into the OpenCode plugin cache and registers it in your **global** configuration (`~/.config/opencode/opencode.jsonc`):
 
-### 1. Place the plugin directory
+```jsonc
+{
+  "plugins": ["rodabarbosa/opencode-tui-model-price"]
+}
+```
 
-Ensure the `opencode-tui-model-price` folder is located in your OpenCode plugins directory (default is `~/.config/opencode/plugins/`):
+Useful follow-ups:
+
+```bash
+opencode plugin list                                                    # confirm the plugin is registered
+opencode plugin update rodabarbosa/opencode-tui-model-price             # pick up new commits
+opencode plugin remove rodabarbosa/opencode-tui-model-price             # uninstall
+```
+
+> Run `/reload` inside OpenCode after installing or removing the plugin.
+
+`./install.sh` is a thin wrapper around the same command:
+
+```bash
+./install.sh                                    # opencode plugin add rodabarbosa/opencode-tui-model-price
+./install.sh github:someone/fork-of-this-plugin # any npm registry or Git specifier
+```
+
+### 2. npm registry (after publishing)
+
+The manifest is publish-ready (`npm publish` creates a 10-file tarball with `src/` and the docs). Once the package is on the registry:
+
+```bash
+opencode plugin add opencode-model-pricing
+```
+
+### 3. Manual installation (local checkout)
+
+Use this only when you want to run a local copy instead of the installed package.
+
+**a. Place the plugin directory.** Ensure the `opencode-tui-model-price` folder is located in your OpenCode plugins directory (default is `~/.config/opencode/plugins/`):
 
 ```bash
 # Windows (PowerShell)
@@ -74,7 +106,7 @@ cd $env:USERPROFILE\.config\opencode\plugins\
 cd ~/.config/opencode/plugins/
 ```
 
-### 2. Register in configuration
+**b. Register in configuration.**
 
 Open your global `opencode.jsonc` file (`~/.config/opencode/opencode.jsonc`) and add the plugin path to the `"plugins"` array:
 

@@ -11,22 +11,60 @@ OpenCode loads the TypeScript sources directly — there is no build step.
 | `./tui` | `src/tui.tsx` | OpenTUI/Solid `/models-price` dialog (CLI TUI) |
 | `./rpc` | `src/rpc.ts` | Shared RPC contract and `PricingMatrix` types |
 
-Pure support modules: `src/pricing.ts` (fetch/normalize/format) and
-`src/model-selection.ts` (session/model helpers). Adding an entrypoint requires
-updating `package.json` `exports` — OpenCode discovers the plugin through it.
+Pure support modules: `src/pricing.ts` (fetch/normalize/format, price lookup and
+model sorting) and `src/model-selection.ts` (session/model helpers). Adding an
+entrypoint requires updating `package.json` `exports` — OpenCode discovers the
+plugin through it.
 
 ## Commands
 
 ```bash
 npm test        # node --test tests/ — the only automated check
 node --test --test-name-pattern="toModelTarget" tests/model-selection.test.ts
-./install.sh    # opencode plugin add rodabarbosa/opencode-tui-model-price
+opencode plugin add rodabarbosa/opencode-tui-model-price   # install/update the package
+./install.sh    # wrapper for the same command
 ```
 
 - No build, lint, typecheck, formatter or CI is configured. Do not invent them.
-- There is no `node_modules`: `@opencode/plugin`, `@opentui/solid` and `solid-js`
-  come from the OpenCode runtime. Keep dependencies at zero unless asked.
+- There is no `node_modules`: `@opencode/plugin`, `@opentui/solid`, `solid-js` and
+  `@opentui/core` come from the OpenCode runtime and stay optional peers; do not
+  turn them into installed dependencies.
 - Manual check: edit files, then run `/reload` inside OpenCode (v2 watches plugin files).
+
+## Distribution
+
+The plugin is a publishable package and **must stay installable with
+`opencode plugin add`** — from Git today, from npm once
+`opencode-model-pricing` is published.
+
+```bash
+opencode plugin add rodabarbosa/opencode-tui-model-price   # Git (works now)
+opencode plugin add opencode-model-pricing                # npm (after `npm publish`)
+```
+
+Rules:
+
+- `package.json` keeps `name: opencode-model-pricing`, `type: module`, the
+  `exports` map (`.`, `./tui`, `./rpc`) pointing at `src/*.ts(x)`, and the `files`
+  allowlist (`src`, `AGENTS.md`, `install.sh`, `README.md`). Entrypoints ship as
+  source; there is no build step, no `main` and no `bin`.
+- Runtime libraries (`@opencode/plugin`, `@opentui/core`, `@opentui/solid`,
+  `solid-js`) are declared **only as optional peers**: OpenCode provides them, so
+  `opencode plugin add` must not pull them into `node_modules` (install stays ~150 KB).
+- `npm publish` ships source only; verify with `npm pack --dry-run` (10 files:
+  `package.json`, docs, `install.sh`, `src/**`, no tests).
+- Verify the install in an isolated config before releasing:
+
+  ```bash
+  XDG_CONFIG_HOME=/tmp/opencode/inst/config XDG_CACHE_HOME=/tmp/opencode/inst/cache \
+    opencode plugin add rodabarbosa/opencode-tui-model-price
+  ```
+
+  It must print `Plugin "..." installed and added to <config>` and leave the real
+  `~/.config/opencode` untouched.
+- Bump `version` for every published change; the Git spec always installs the
+  default branch. Keep README installation steps and `install.sh` in sync with the
+  package name and repository path.
 
 ## Conventions that are easy to get wrong
 
@@ -36,8 +74,8 @@ node --test --test-name-pattern="toModelTarget" tests/model-selection.test.ts
 - `src/tui.tsx` line 1 must keep `/** @jsxImportSource @opentui/solid */`;
   `tsconfig.json` defaults to `solid-js`. Any new file rendering OpenTUI primitives
   needs the same pragma.
-- Keep `src/model-selection.ts` free of OpenTUI/Solid/OpenCode imports — it is the
-  only module testable outside the runtime.
+- Keep `src/model-selection.ts` and `src/pricing.ts` free of OpenTUI/Solid/OpenCode
+  imports — they are the only modules testable outside the runtime.
 - Names differ on purpose: directory/repo `opencode-tui-model-price`, package
   `opencode-model-pricing`, plugin ids `model-pricing` (server) and
   `model-pricing-tui` (TUI). Renaming one means renaming every reference
@@ -49,8 +87,15 @@ node --test --test-name-pattern="toModelTarget" tests/model-selection.test.ts
 - Capture the prompt's session at dialog open with
   `resolveActiveSessionID(context.ui.router.current())`. Never use
   `session.list()[0]` — that is only the most recently updated session.
-- Without a session the dialog is browse-only: `Enter` / `[ Select Model ]` must be
+- Without a session the dialog is browse-only: `Enter` / double-click must be
   refused with a message and the dialog stays open.
+- The dialog is sized to 70% of the terminal rows (`context.renderer.height`); the
+  visible model window is computed in rows (group headers cost 2) and always keeps
+  the selection visible.
+- Each group is sorted by name by default; `Ctrl+S` (or the footer `[Sort: ...]`
+  button) toggles ascending input price with name as the tie-breaker.
+- The footer stays two lines: hints plus clickable `[Refresh]` and `[Sort: ...]`,
+  then the keyboard shortcuts. Keep the action group from shrinking.
 - Switch models with the catalog `id` (`toModelTarget`), not the provider-facing
   `modelID`; confirm against the committed `session.model` before closing and keep
   the dialog open on error.
